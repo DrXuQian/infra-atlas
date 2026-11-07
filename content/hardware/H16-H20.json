@@ -1,0 +1,2000 @@
+{
+  "modules": [
+    {
+      "id": "H16",
+      "kicker": "ATOMIC OPERATIONS",
+      "question": "同一个计数器，为什么会把大量线程串成一条路径？",
+      "summary": "把原子性、返回值依赖、地址竞争和聚合拆开，理解一个正确的计数器何时成为吞吐瓶颈。",
+      "scope": "CUDA/PTX 的原子语义；global/shared 路径按 NCU 文档解释。图中串行顺序只是一种合法顺序，不代表硬件仲裁策略或固定周期。",
+      "prerequisites": [
+        "H09 访存请求",
+        "H10 Shared memory",
+        "H15 内存顺序"
+      ],
+      "sources": [
+        {
+          "id": "H16-s1",
+          "title": "PTX ISA 8.7 · atom 与 red",
+          "url": "https://docs.nvidia.com/cuda/archive/12.8.0/parallel-thread-execution/index.html",
+          "kind": "official",
+          "note": "§9.7.13.5–6；atomicity、scope、返回旧值与不返回旧值的区分；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H16-s2",
+          "title": "CUDA · Advanced Kernel Programming",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html",
+          "kind": "official",
+          "note": "§3.2.4.1 Scoped Atomics；relaxed 与发布消费分离；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H16-s3",
+          "title": "CUDA · Built-in Atomic Functions",
+          "url": "https://docs.nvidia.com/cuda/archive/13.4.2/cuda-programming-guide/05-appendices/cpp-language-extensions.html",
+          "kind": "official",
+          "note": "Atomic Functions；atomicAdd、atomicCAS、向量元素的原子性；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H16-s4",
+          "title": "NVIDIA · Warp-aggregated Atomics",
+          "url": "https://developer.nvidia.com/blog/cuda-pro-tip-optimized-filtering-warp-aggregated-atomics/",
+          "kind": "official",
+          "note": "2017 更新版；选 leader、聚合、广播、计算 lane 偏移；只借鉴机制，不迁移旧设备性能数字；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H16-s5",
+          "title": "NCU · Memory Workload Analysis",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "Hardware Model / Caches 与 Memory Workload Analysis；L2 global atomics、L1TEX 请求路径；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "MemoryWorkloadAnalysis（section）",
+          "meaning": "比较 global/shared 的 atomic 与 reduction 请求及相应吞吐；聚合有效时，相同逻辑更新量对应的硬件原子请求应减少。",
+          "caveat": "计数口径随 GPU 和 NCU 版本变化；先 ncu --list-sections 与 --query-metrics。请求减少不保证耗时同比下降。",
+          "sourceId": "H16-s5"
+        },
+        {
+          "name": "SourceCounters（section）",
+          "meaning": "定位实际执行的原子/归约 SASS 与返回结果的依赖使用点，检查编译器是否已做聚合。",
+          "caveat": "PTX atom 不保证最终 SASS opcode 一一对应；不要仅看源码中 atomicAdd 的调用次数。",
+          "sourceId": "H16-s5"
+        }
+      ],
+      "walkthrough": {
+        "title": "两个请求更新一个计数器",
+        "assumption": "一个32位整数初值10；A加3、B加2，均需返回旧值。选择A先B后作为合法示例；箭头表示逻辑生效，不表示独立的可观察读写阶段。",
+        "nodes": [
+          {
+            "id": "A",
+            "label": "请求 A",
+            "kind": "compute"
+          },
+          {
+            "id": "X",
+            "label": "计数器 X",
+            "kind": "state"
+          },
+          {
+            "id": "B",
+            "label": "请求 B",
+            "kind": "compute"
+          },
+          {
+            "id": "R",
+            "label": "返回值",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "请求尚未生效",
+            "explanation": "A、B 都到达；原子性允许任一请求先发生，但不允许两次更新丢失。",
+            "active": [
+              "A",
+              "B"
+            ],
+            "values": {
+              "A": "+3 待处理",
+              "X": "10",
+              "B": "+2 待处理",
+              "R": "未返回"
+            },
+            "edges": []
+          },
+          {
+            "title": "A 原子生效",
+            "explanation": "将读旧值与写新值看作同一个不可分割的状态转换。",
+            "active": [
+              "A",
+              "X"
+            ],
+            "values": {
+              "A": "生效",
+              "X": "13",
+              "B": "+2 待处理",
+              "R": "A: old=10"
+            },
+            "edges": [
+              {
+                "from": "A",
+                "to": "X",
+                "label": "+3"
+              },
+              {
+                "from": "X",
+                "to": "R",
+                "label": "旧值10"
+              }
+            ]
+          },
+          {
+            "title": "B 随后生效",
+            "explanation": "B 读取的是 A 更新后的值，而不是最初的10。",
+            "active": [
+              "B",
+              "X"
+            ],
+            "values": {
+              "A": "已完成",
+              "X": "15",
+              "B": "生效",
+              "R": "A:10 / B:13"
+            },
+            "edges": [
+              {
+                "from": "B",
+                "to": "X",
+                "label": "+2"
+              },
+              {
+                "from": "X",
+                "to": "R",
+                "label": "旧值13"
+              }
+            ]
+          },
+          {
+            "title": "返回值各自消费",
+            "explanation": "最终值15不依赖这两次整数加法的先后，但返回旧值取决于合法顺序。",
+            "active": [
+              "R"
+            ],
+            "values": {
+              "A": "old=10",
+              "X": "15",
+              "B": "old=13",
+              "R": "可作为唯一索引"
+            },
+            "edges": [
+              {
+                "from": "R",
+                "to": "A",
+                "label": "10"
+              },
+              {
+                "from": "R",
+                "to": "B",
+                "label": "13"
+              }
+            ]
+          },
+          {
+            "title": "换成聚合方案",
+            "explanation": "若只需总和，可先合成+5再一次更新；若要各自索引，还须在组内计算偏移。",
+            "active": [
+              "A",
+              "X",
+              "R"
+            ],
+            "values": {
+              "A": "合计+5",
+              "X": "10 → 15",
+              "B": "组内偏移3",
+              "R": "基址10 + 偏移"
+            },
+            "edges": [
+              {
+                "from": "A",
+                "to": "X",
+                "label": "一次+5"
+              },
+              {
+                "from": "X",
+                "to": "R",
+                "label": "基址10"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "地址竞争与聚合对照（实验设计，未执行）",
+        "change": "保持总更新次数、数据类型、grid和输入不变；分别更新单个bin、均匀分布bin，以及warp内按相同地址聚合。",
+        "expect": "热点减少通常缓解同地址串行化；聚合收益应随同warp同地址更新比例变化，而非固定32倍。",
+        "measure": "先验证所有bin总和；检查SASS和原子/归约请求，再用未被profiling扰动的CUDA event计时比较吞吐。",
+        "confounds": "编译器自动聚合、shared初始化/归并成本、bin缓存局部性、返回值被优化掉、整数溢出及浮点求和次序。"
+      },
+      "atoms": [
+        {
+          "id": "H16.01",
+          "question": "atomic read-modify-write 的“不可分割”到底保证了什么？",
+          "explain": [
+            "对于同一地址和相容作用域内的竞争访问，一次原子读改写在逻辑上整体生效：它取得旧值、计算更新、写回新值，其他参与者不能观察到一半更新。硬件并不需要把这三步暴露成三条普通load、add、store。",
+            "原子性只覆盖规定的数据宽度和操作对象。传统atomicAdd默认是relaxed顺序，不能单靠计数器自增就发布其他地址的数据。先确定类型、对齐、地址空间和scope，再讨论是否满足算法的同步需求。"
+          ],
+          "example": "X=10，A执行atomicAdd(X,3)，B执行atomicAdd(X,2)。最终X=15；若A先发生，A取得10、B取得13。",
+          "pitfall": "把“计数器更新不会丢”误解为“此前所有普通store已对其他线程可见”。",
+          "check": {
+            "question": "两个线程用普通load/add/store加1，为什么可能只增加1？",
+            "answer": "它们可能都读到同一旧值，然后都写出旧值+1；缺少原子读改写的整体生效。"
+          },
+          "state": "X、两个增量、操作类型与scope。",
+          "transition": "每次合法原子操作把X从old转换为f(old)，并按接口返回old。",
+          "prediction": "整数加法无溢出时总和可预测，返回旧值的分配顺序未必可预测。",
+          "sourceIds": [
+            "H16-s1",
+            "H16-s2"
+          ]
+        },
+        {
+          "id": "H16.02",
+          "question": "32 个线程同时加同一地址，为什么不等于32路独立计算？",
+          "explain": [
+            "不同线程的原子操作即使同时到达，也需要在该地址上形成相容的更新序列。它们竞争的是同一个存储状态，而不是32份互不相关的数据；增加warp只会增加排队来源，不能消除这个依赖。",
+            "串行化的范围不能直接扩大为“所有原子操作全局串行”。不同地址可以利用不同内部资源并行推进；同地址吞吐还受类型、是否返回值和请求合并等因素影响。只有观测具体工作负载，才能给出更新率。"
+          ],
+          "example": "32个lane各加1到X，逻辑最终增加32。若每个lane下一条指令要用自己的old值，它还额外等待返回路径。",
+          "pitfall": "用HBM总带宽预测热点计数器的最大更新率。",
+          "check": {
+            "question": "加倍线程数而更新率不变，是否说明GPU没有执行新增线程？",
+            "answer": "不说明。新增线程可能只是加入同一热点地址的等待队列。"
+          },
+          "state": "一个热点地址、竞争请求数、返回值依赖。",
+          "transition": "同地址更新按某个合法序列生效，后续请求不能跳过前序状态变化。",
+          "prediction": "竞争加重时，总请求数增加而单位时间有效更新数可能趋于平台。",
+          "sourceIds": [
+            "H16-s1",
+            "H16-s5"
+          ]
+        },
+        {
+          "id": "H16.03",
+          "question": "“分散到更多地址”一定能让原子操作更快吗？",
+          "explain": [
+            "把更新从一个bin分散到多个bin，减少了每个地址上的逻辑冲突，但请求仍共享LSU、cache、L2分区或shared原子资源。并行地址数只是可扩展性的条件之一，不是可实现带宽的直接公式。",
+            "地址分布还会改变局部性。极度分散的global更新可能触及更多cache line和sector，降低复用；shared直方图也可能遇到bank相关限制。因此应同时观察竞争程度、事务量和总耗时，寻找合适的分片粒度。"
+          ],
+          "example": "比较同样一百万次更新落到1、32、4096个bin：前者热点强，后者竞争少，但工作集和访存流量也不同。",
+          "pitfall": "把不同地址等同于不同物理原子执行单元。",
+          "check": {
+            "question": "两个版本原子请求数相同，运行时间为什么可能不同？",
+            "answer": "地址热点、局部性和资源分布不同，排队与服务成本就不同。"
+          },
+          "state": "bin数、请求到bin的映射、缓存工作集。",
+          "transition": "地址分片减少每个状态变量上的更新链，同时改变请求经过的共享资源。",
+          "prediction": "增加bin数最初可能提高吞吐，随后被其他资源或流量限制。",
+          "sourceIds": [
+            "H16-s1",
+            "H16-s5"
+          ]
+        },
+        {
+          "id": "H16.04",
+          "question": "shared atomic 与 global atomic 为什么不能只用“延迟大小”区分？",
+          "explain": [
+            "shared atomic更新CTA共享的片上存储；global atomic面向全局地址，NCU硬件模型在L2侧描述了global原子执行资源。它们具有不同的地址空间、共享范围和可竞争资源，不能当作同一条路径只换个缓存命中率。",
+            "把全局直方图改成每个block一份shared直方图，会减少跨block热点，但新增初始化、CTA同步和最终global归并。速度取决于整个算法；shared容量和block驻留也会参与取舍，而不是shared版本天然更快。"
+          ],
+          "example": "每个block先在shared里统计256个bin，再由有限线程归并到global；输入很小时，初始化和归并可能超过节省的原子成本。",
+          "pitfall": "把shared atomic的block内原子性当成跨block共享同一个对象。",
+          "check": {
+            "question": "shared中累加正确，为什么最终global结果仍可能错？",
+            "answer": "可能缺少初始化/消费同步，或最终归并不是正确的原子/分区写回。"
+          },
+          "state": "两个地址空间、局部直方图和全局归并缓冲。",
+          "transition": "将跨block竞争改为block内更新，再执行受控的全局合并。",
+          "prediction": "大输入高热点可能受益，小输入或大bin初始化成本可能抵消收益。",
+          "sourceIds": [
+            "H16-s2",
+            "H16-s5"
+          ]
+        },
+        {
+          "id": "H16.05",
+          "question": "不使用 atomicAdd 返回值，硬件是否还必须送回旧值？",
+          "explain": [
+            "PTX把带目标寄存器的atom与不返回旧值的red分开描述。若程序只关心更新结果、不消费旧值，编译器可能选择不返回结果的归约路径，从而减少返回数据和寄存器依赖；最终选择必须查看SASS。",
+            "这种变化不取消同地址更新的原子性，也不保证没有排队。反之，若旧值用来为输出分配唯一索引，就不能随意丢弃返回值。比较性能时要固定算法语义，否则测到的是不同工作而不是纯指令优化。"
+          ],
+          "example": "计数counter+=1可以不需要old；压缩输出的pos=atomicAdd(counter,1)必须返回old给后续store使用。",
+          "pitfall": "把源码里没有赋值的atomicAdd直接认定为某个固定RED opcode。",
+          "check": {
+            "question": "返回值未使用的版本更快，能否据此推断原子执行本身变快？",
+            "answer": "不能。差异可能来自返回路径、依赖链或编译器优化，需要反汇编和计数器佐证。"
+          },
+          "state": "原子目标、旧值是否被消费、后续依赖。",
+          "transition": "旧值不可观察时可选择无返回语义；需要旧值时必须保留结果路径。",
+          "prediction": "取消不必要的返回值可能降低依赖压力，但不会消除热点。",
+          "sourceIds": [
+            "H16-s1",
+            "H16-s5"
+          ]
+        },
+        {
+          "id": "H16.06",
+          "question": "CAS 循环为什么会在竞争下做很多“无效工作”？",
+          "explain": [
+            "compare-and-swap仅在内存值等于预期值时写入新值，并返回比较时的旧值。线程根据观测值计算候选更新；若别的线程先修改对象，本次CAS失败，必须从返回的新观测值重新计算，再尝试。",
+            "一次算法更新可能对应多次CAS请求，因此应分开统计成功更新数和尝试次数。浮点实现还要处理NaN等表示问题；官方double atomicAdd示例用整数位表示比较，避免NaN不等于自身导致错误的循环判断。"
+          ],
+          "example": "A、B都观察X=5并拟写6；A成功后X=6，B的expected=5失败，读回6后重算7，再成功。",
+          "pitfall": "CAS失败后直接重试旧的desired值，或用浮点NaN相等性判断是否成功。",
+          "check": {
+            "question": "成功更新100次却执行1000次CAS，意味着什么？",
+            "answer": "平均每次成功更新消耗10次尝试，竞争和重试流量显著。"
+          },
+          "state": "expected、desired、内存当前值与成功标志。",
+          "transition": "匹配则原子替换；不匹配则读回当前值并重新计算。",
+          "prediction": "热点竞争增加时，尝试/成功比可能上升，吞吐未必随线程数增加。",
+          "sourceIds": [
+            "H16-s1",
+            "H16-s3"
+          ]
+        },
+        {
+          "id": "H16.07",
+          "question": "warp 聚合怎样把32次原子更新变成更少的请求？",
+          "explain": [
+            "先在参与线程中识别相同目标，计算总增量并选出leader，由leader执行一次原子操作，再把返回基址广播给组员。若需要每个线程自己的输出位置，还要根据组内前缀和构造独占区间，不能所有lane都用同一个old。",
+            "最多32倍减少只适用于一个完整warp都更新同一对象的理想请求计数。地址分组、shuffle、投票和掩码管理也有成本；分支中的参与集合必须一致。编译器可能已自动聚合，应先检查SASS再比较手写版本。"
+          ],
+          "example": "5个活跃lane各申请1个位置：leader加5，返回base=40；按组内rank分别写40至44。",
+          "pitfall": "把warp聚合解释成所有线程自动向任意不同地址合并为一次原子。",
+          "check": {
+            "question": "只有两个lane更新同一bin，理论原子请求最多减少几倍？",
+            "answer": "对这两个更新可由2次减到1次；其余不同bin还需要各自处理。"
+          },
+          "state": "参与掩码、同地址子组、总增量、组内rank。",
+          "transition": "leader提交总更新，广播旧基址，组员用基址加前缀偏移。",
+          "prediction": "同warp同地址比例越高，聚合越可能减少请求，但总耗时仍含组内协作。",
+          "sourceIds": [
+            "H16-s4",
+            "H16-s1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H17",
+      "kicker": "TENSOR CORE FOUNDATIONS",
+      "question": "一条 MMA 究竟算了多少工作，又由谁准备它的数据？",
+      "summary": "先掌握warp级MMA的逻辑矩阵、fragment与参与规则，再将数据搬运、精度和有效算量接到性能分析。",
+      "scope": "主要采用Ampere支持的warp级mma.sync作例子；Hopper WGMMA与Blackwell tcgen05另见H19。图是逻辑矩阵分解，不是Tensor Core内部阵列或逐周期实现。",
+      "prerequisites": [
+        "H02 SIMT",
+        "H07 寄存器",
+        "H10 Shared memory"
+      ],
+      "sources": [
+        {
+          "id": "H17-s1",
+          "title": "PTX ISA 8.7 · Warp Level MMA",
+          "url": "https://docs.nvidia.com/cuda/archive/12.8.0/parallel-thread-execution/index.html",
+          "kind": "official",
+          "note": "§9.7.14；矩阵形状、fragment、mma.sync与mma.sp的类型/参与条件；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H17-s2",
+          "title": "CuTe · MMA Atom",
+          "url": "https://docs.nvidia.com/cutlass/4.8.0/media/docs/cpp/cute/0t_mma_atom.html",
+          "kind": "official",
+          "note": "CUTLASS 4.8.0；MMA traits、线程/值布局及TiledMMA分解；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H17-s3",
+          "title": "Dissecting Tensor Cores via Microbenchmarks",
+          "url": "https://arxiv.org/abs/2206.02874",
+          "kind": "paper",
+          "note": "Sun等，2022；§4–8方法、吞吐/延迟及数值行为，仅对论文设备和方法成立；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H17-s4",
+          "title": "NCU · Tensor MMA Interpretation",
+          "url": "https://docs.nvidia.com/nsight-compute/ComputeTriage/",
+          "kind": "official",
+          "note": "§3.4.6；MMA家族、指令计数和有用FLOPs/执行FLOPs的区别；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H17-s5",
+          "title": "CUPTI 13.2.1 · Metrics",
+          "url": "https://docs.nvidia.com/cupti/13.2.1/main/main.html",
+          "kind": "official",
+          "note": "指标映射中的sm__pipe_tensor_cycles_active；目标设备仍需query验证；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active",
+          "meaning": "在提供此指标的GPU上，比较Tensor流水线活跃程度相对其active-cycle峰值的比例；avg聚合SM实例。",
+          "caveat": "它不是模型MFU，也不扣除padding和无用矩阵元素；架构可能有其他tensor/tc路径，必须query支持情况。",
+          "sourceId": "H17-s5"
+        },
+        {
+          "name": "ComputeWorkloadAnalysis / InstructionStats（sections）",
+          "meaning": "确认实际MMA家族和执行路径，结合tile形状计算每次逻辑操作的工作量。",
+          "caveat": "WGMMA与tcgen05的warp级计数粒度不同；不能直接把所有MMA opcode计数相加再乘同一个系数。",
+          "sourceId": "H17-s4"
+        }
+      ],
+      "walkthrough": {
+        "title": "把 D=A×B+C 展开成两个 K 分片",
+        "assumption": "教学矩阵2×2，A=[[1,2],[3,4]]、B=[[5,6],[7,8]]、C全零。每步是代数分解，并非真实mma支持的2×2指令形状或时钟。",
+        "nodes": [
+          {
+            "id": "A",
+            "label": "矩阵 A",
+            "kind": "data"
+          },
+          {
+            "id": "B",
+            "label": "矩阵 B",
+            "kind": "data"
+          },
+          {
+            "id": "M",
+            "label": "逻辑 MMA",
+            "kind": "compute"
+          },
+          {
+            "id": "D",
+            "label": "累加矩阵",
+            "kind": "state"
+          }
+        ],
+        "steps": [
+          {
+            "title": "初始化累加器",
+            "explanation": "先把C作为D的初值；这里全零。",
+            "active": [
+              "D"
+            ],
+            "values": {
+              "A": "[1 2;3 4]",
+              "B": "[5 6;7 8]",
+              "M": "尚未执行",
+              "D": "[0 0;0 0]"
+            },
+            "edges": []
+          },
+          {
+            "title": "K=0 的外积",
+            "explanation": "A第0列乘B第0行，为四个输出各贡献一个乘积。",
+            "active": [
+              "A",
+              "B",
+              "M"
+            ],
+            "values": {
+              "A": "[1;3]",
+              "B": "[5 6]",
+              "M": "外积",
+              "D": "[0 0;0 0]"
+            },
+            "edges": [
+              {
+                "from": "A",
+                "to": "M",
+                "label": "K0列"
+              },
+              {
+                "from": "B",
+                "to": "M",
+                "label": "K0行"
+              }
+            ]
+          },
+          {
+            "title": "保留部分和",
+            "explanation": "把第一份贡献加入D，保留累加状态。",
+            "active": [
+              "M",
+              "D"
+            ],
+            "values": {
+              "A": "K0已消费",
+              "B": "K0已消费",
+              "M": "[5 6;15 18]",
+              "D": "[5 6;15 18]"
+            },
+            "edges": [
+              {
+                "from": "M",
+                "to": "D",
+                "label": "加到D"
+              }
+            ]
+          },
+          {
+            "title": "K=1 的贡献",
+            "explanation": "第二列/行的外积为[14 16;28 32]，继续累加。",
+            "active": [
+              "A",
+              "B",
+              "M",
+              "D"
+            ],
+            "values": {
+              "A": "[2;4]",
+              "B": "[7 8]",
+              "M": "[14 16;28 32]",
+              "D": "[19 22;43 50]"
+            },
+            "edges": [
+              {
+                "from": "A",
+                "to": "M",
+                "label": "K1列"
+              },
+              {
+                "from": "B",
+                "to": "M",
+                "label": "K1行"
+              },
+              {
+                "from": "M",
+                "to": "D",
+                "label": "加到旧D"
+              }
+            ]
+          },
+          {
+            "title": "映射到指令",
+            "explanation": "真实MMA一次处理受支持的M×N×K，fragment分散在线程中；逻辑结果仍是这些点积。",
+            "active": [
+              "D"
+            ],
+            "values": {
+              "A": "输入fragment",
+              "B": "输入fragment",
+              "M": "全warp协作",
+              "D": "输出fragment"
+            },
+            "edges": [
+              {
+                "from": "M",
+                "to": "D",
+                "label": "按指令布局分布"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "相同算量，不同累加器链（实验设计，未执行）",
+        "change": "在同一GPU和相同MMA类型/形状下，对比一个累加器链与交错的多个独立累加器链；总MMA次数固定。",
+        "expect": "依赖受限时，多链可能提高吞吐；超过资源容量后收益会停止，额外寄存器还可能降低驻留。",
+        "measure": "检查最终SASS与寄存器数；记录正确性误差、CUDA event时间、Tensor流水线及occupancy；另记录边界padding的有效FLOPs。",
+        "confounds": "编译器重排、指令被消除、不同累加顺序的舍入、SM时钟、供数瓶颈和过短计时窗口。"
+      },
+      "atoms": [
+        {
+          "id": "H17.01",
+          "question": "M×N×K 描述的是线程数，还是一次矩阵计算？",
+          "explain": [
+            "MMA的M×N×K定义了A为M×K、B为K×N、C和D为M×N，逻辑计算是D=A×B+C。常见的浮点FLOP记法把一次乘和一次加记为2次运算，所以一条普通dense逻辑MMA约对应2MNK FLOPs。",
+            "这些维度不等于物理乘法器数量，也不规定结果在一个周期内全部完成。指令的支持形状、类型和内部执行方式依赖架构；PTX指令到SASS也需核对。用MMA次数估算算量前，先确认家族与计数粒度。"
+          ],
+          "example": "m16n8k16对应16×8个输出，每个累加16项，按乘加计2次得到4096 FLOPs，而不是4096个线程。",
+          "pitfall": "把逻辑指令tile直接画成等规模的物理硬件阵列。",
+          "check": {
+            "question": "同一个MMA形状换成更低精度后，逻辑FLOPs是否自动翻倍？",
+            "answer": "不自动改变；逻辑矩阵运算量由形状决定，硬件吞吐上限和存储字节可能变化。"
+          },
+          "state": "A、B、C/D的形状，数据类型和一次逻辑MMA。",
+          "transition": "每个D[i,j]从C[i,j]加上K个乘积。",
+          "prediction": "改变K会改变逻辑工作量，但不能仅据此预测硬件周期。",
+          "sourceIds": [
+            "H17-s1",
+            "H17-s4"
+          ]
+        },
+        {
+          "id": "H17.02",
+          "question": "为什么不能让warp中的几个lane单独执行 mma.sync？",
+          "explain": [
+            "warp级mma.sync是collective操作：参与warp的线程按同一指令共同提供fragment并接收结果，不能把它理解成32次彼此独立的标量调用。PTX的sync/aligned约束要求相应线程一致执行，分支或提前退出必须满足指令契约。",
+            "尾块有无效矩阵元素时，通常保持collective参与，先把越界输入置零并限制最终写回，而不是只让“有有效输出”的lane调用MMA。WGMMA的参与范围扩大到warpgroup；tcgen05则有不同的单线程发起语义，不可套同一规则。"
+          ],
+          "example": "一个tile只剩3列有效输出：所有MMA参与线程仍协作，B的无效列补零，写回时只存有效3列。",
+          "pitfall": "对mma.sync按lane ID做分支，认为未参与lane只会少算自己的元素。",
+          "check": {
+            "question": "为什么屏蔽输出store通常比屏蔽MMA参与线程更安全？",
+            "answer": "store可按有效地址独立predication，MMA则需要规定的完整collective参与。"
+          },
+          "state": "warp参与集合、指令参数一致性与有效数据mask。",
+          "transition": "完整collective发起MMA；有效性通过输入填充和输出存储管理。",
+          "prediction": "保留完整参与后结果可正确，但边界tile会执行额外无用算量。",
+          "sourceIds": [
+            "H17-s1"
+          ]
+        },
+        {
+          "id": "H17.03",
+          "question": "fragment 是矩阵的一块连续小矩形吗？",
+          "explain": [
+            "fragment是某个线程持有的MMA操作数寄存器集合，矩阵元素到lane和寄存器槽的分布由指令规定。一个线程可能持有不连续行列中的元素；把fragment当作普通row-major数组会把逻辑坐标和存储槽混淆。",
+            "低级mma的布局可按PTX图表逐一推导，CuTe把线程和值到坐标的映射编码为layout。高层WMMA的fragment内部布局则不应被当成跨架构ABI。调试时给矩阵元素写入可识别编号，跟踪搬运与计算各阶段的坐标更可靠。"
+          ],
+          "example": "用A[i,j]=100i+j标记数据，验证lane0的各寄存器对应哪些坐标，再对照实际mma形状的PTX fragment图。",
+          "pitfall": "看到每个线程4个FP32累加器，就假设它负责连续4个输出列。",
+          "check": {
+            "question": "换一个MMA shape后，旧的fragment索引逻辑还能直接复用吗？",
+            "answer": "不能保证。线程/值到矩阵坐标的映射可能随形状和类型改变。"
+          },
+          "state": "lane ID、寄存器槽、逻辑矩阵坐标映射。",
+          "transition": "按规定layout把元素分发到fragment，再由collective消费。",
+          "prediction": "布局错误可能产生稳定但错误的结果，不能用“重复运行一致”验证正确。",
+          "sourceIds": [
+            "H17-s1",
+            "H17-s2"
+          ]
+        },
+        {
+          "id": "H17.04",
+          "question": "Tensor Core 很快，为什么供数仍是 kernel 的主要工作？",
+          "explain": [
+            "算术指令只接受规定位置和布局的操作数。warp级mma通常读取寄存器fragment，输入常先从global进入shared，再通过ldmatrix或其他load装入寄存器；每一级都需要正确的地址、对齐和布局变换。",
+            "因此一次GEMM tile的成本不仅是MMA，还包括global搬运、shared读写、地址计算、同步以及epilogue。优化shared布局可减轻bank冲突；增加复用可减少global读取。Hopper/SM100的descriptor操作数路径不同，不能机械套用这一搬运链。"
+          ],
+          "example": "同样的16×8×16计算，若每次都重新从global加载A/B，可能远慢于让寄存器或shared中的tile参与多次MMA。",
+          "pitfall": "看到Tensor Core峰值高，就认为减半数据类型必然让整个kernel翻倍。",
+          "check": {
+            "question": "改shared布局后MMA次数不变却变快，说明什么？",
+            "answer": "供数或布局开销可能被降低，而不是逻辑计算量发生变化。"
+          },
+          "state": "global tile、shared tile、fragment和复用次数。",
+          "transition": "数据必须完成对应搬运和同步后，才能作为MMA操作数。",
+          "prediction": "提高有效复用或减少供数冲突，可在MMA数量不变时缩短总时间。",
+          "sourceIds": [
+            "H17-s1",
+            "H17-s2"
+          ]
+        },
+        {
+          "id": "H17.05",
+          "question": "连续对同一 accumulator 做MMA会形成怎样的依赖？",
+          "explain": [
+            "D=A×B+D把上一轮累加结果作为下一轮输入，形成真实数据依赖。若下一次操作必须等待该结果可用，单链可能无法持续覆盖执行延迟；交错多个互不相关的输出tile可增加指令级并行性。",
+            "但独立累加器需要更多寄存器或TMEM，以及更多供数与最终写回。增加链数可能降低block驻留，或让供数路径先饱和。异步MMA的提交顺序与等待规则也不同，应按指令家族分析，不能模拟成任意乱序执行。"
+          ],
+          "example": "顺序C0+=A0B0、C0+=A1B1是单链；交错C0+=A0B0、C1+=A2B2、C0+=A1B1可在程序顺序内提供独立工作。",
+          "pitfall": "把更多累加器理解成硬件自动跳过前面的依赖指令乱序执行。",
+          "check": {
+            "question": "增加独立链到4条后性能不再涨，最先查什么？",
+            "answer": "查Tensor吞吐、供数、寄存器/驻留与发射资源，确定新的瓶颈。"
+          },
+          "state": "累加器依赖关系、结果可用性、资源容量。",
+          "transition": "只在输入依赖满足时推进相应链；不同链可交错提供工作。",
+          "prediction": "依赖受限时少量独立链有益，收益不会无限线性增长。",
+          "sourceIds": [
+            "H17-s1",
+            "H17-s3"
+          ]
+        },
+        {
+          "id": "H17.06",
+          "question": "Tensor pipeline 接近满载，为什么有效算力仍可能很低？",
+          "explain": [
+            "硬件执行的是指令tile，不是应用的任意尺寸。矩阵边界不整除tile时，填充区域也可能占据MMA计算资源；掩码只禁止无效输出写回，并不会自动将这部分矩阵乘法成本归零。",
+            "因此要同时区分执行FLOPs与有用FLOPs。前者描述硬件处理了多少指令工作，后者只计应用所需元素。大tile减少循环和发射开销，却可能增加边界浪费及资源用量；小batch、瘦矩阵尤其需要比较这两方面。"
+          ],
+          "example": "8×8×16问题若用16×8×16逻辑tile覆盖，M方向有一半输出无效；即使Tensor路径忙碌，有用FLOPs仍只有执行量的一半。",
+          "pitfall": "把NCU Tensor利用率当成端到端模型MFU。",
+          "check": {
+            "question": "有效FLOPs不变、执行FLOPs下降而时间下降，是不是算力退化？",
+            "answer": "不是，通常说明减少了填充或冗余计算，用更少工作完成同一任务。"
+          },
+          "state": "应用M/N/K、指令tile和边界有效区域。",
+          "transition": "向tile尺寸扩展再计算；只将有效区域计入应用算量。",
+          "prediction": "形状不匹配越严重，硬件利用率与有用算力的差距越可能扩大。",
+          "sourceIds": [
+            "H17-s1",
+            "H17-s4"
+          ]
+        },
+        {
+          "id": "H17.07",
+          "question": "FP16输入、FP32累加是否等价于完整FP32 GEMM？",
+          "explain": [
+            "输入表示和累加表示是两件事。把FP32数据转换为FP16或BF16时已经舍弃部分信息；使用FP32累加能减少累加阶段的舍入影响，却无法恢复输入转换丢失的位。不同格式的动态范围与有效精度也不同。",
+            "MMA的乘积、累加和舍入细节受指令类型与规范约束，误差还与K长度、数值分布和求和次序相关。评估时应同时报告绝对/相对误差和任务指标；某篇微基准观察不能外推为所有代际的完整数值契约。"
+          ],
+          "example": "两个接近但在FP16中量化为同一个值的FP32输入，即使用FP32 accumulator，也无法保留它们原始差异。",
+          "pitfall": "把“FP32 accumulation”简写为“没有精度损失”。",
+          "check": {
+            "question": "增加K后误差变大，是否一定由输入量化造成？",
+            "answer": "不一定，还可能涉及累加舍入、抵消、溢出和计算次序，需分离实验。"
+          },
+          "state": "输入格式、累加格式、数值范围与归约长度。",
+          "transition": "先形成可表示输入，再按目标MMA规则乘加和累积。",
+          "prediction": "低精度输入的差异不会被高精度累加自动恢复。",
+          "sourceIds": [
+            "H17-s1",
+            "H17-s3"
+          ]
+        },
+        {
+          "id": "H17.08",
+          "question": "结构化稀疏的“零”为什么还需要元数据？",
+          "explain": [
+            "稀疏MMA使用规定的局部结构，把允许保留的非零元素压紧，并用元数据说明它们在原稠密位置中的索引。例如某些FP16/BF16路径采用每4个元素保留2个的结构，硬件依此将压缩值和B的正确位置配对。",
+            "稀疏模式与粒度取决于指令家族、类型和形状，不能把所有低精度稀疏都称为2:4。任意50%零也不等价于满足结构；元数据构建、压缩、精度损失以及shape限制都必须算入部署成本，峰值倍数不是端到端加速保证。"
+          ],
+          "example": "一组[0,a,0,b]可存[a,b]及位置1、3；若只保留[a,b]而丢掉位置，无法知道应与B的哪两行相乘。",
+          "pitfall": "把随机一半元素为零的普通dense数组直接交给sparse MMA。",
+          "check": {
+            "question": "每4个元素中有3个非零，能否无损压成2:4格式？",
+            "answer": "一般不能；必须改变数值、重排算法或选择其他表示。"
+          },
+          "state": "压缩值、结构约束、元数据索引和原始K维位置。",
+          "transition": "按metadata把保留元素映射到正确乘积位置，省略规定的零贡献。",
+          "prediction": "符合结构可减少规定的工作，但压缩和外围开销仍决定最终收益。",
+          "sourceIds": [
+            "H17-s1",
+            "H17-s3"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H18",
+      "kicker": "ASYNCHRONOUS PIPELINES",
+      "question": "“提前发起”何时才会变成真正的计算与搬运重叠？",
+      "summary": "用缓冲区所有权和完成条件理解cp.async、group、mbarrier与跨proxy顺序；异步不意味着可以提前消费。",
+      "scope": "cp.async以SM80+经典global→shared路径为主；tx-count及TMA相关mbarrier以SM90范围说明。图为显式同步的双缓冲教学状态，不给真实延迟或重叠比例。",
+      "prerequisites": [
+        "H06 依赖",
+        "H10 Shared memory",
+        "H15 同步与顺序"
+      ],
+      "sources": [
+        {
+          "id": "H18-s1",
+          "title": "PTX ISA 8.7 · cp.async Groups",
+          "url": "https://docs.nvidia.com/cuda/archive/12.8.0/parallel-thread-execution/index.html",
+          "kind": "official",
+          "note": "§9.7.9的数据搬运cp.async、commit_group、wait_group；每线程group与可见性；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H18-s2",
+          "title": "PTX ISA 8.7 · mbarrier 与 proxy",
+          "url": "https://docs.nvidia.com/cuda/archive/12.8.0/parallel-thread-execution/index.html",
+          "kind": "official",
+          "note": "§9.7.13.15 mbarrier；§8内存模型及fence.proxy；arrival、tx-count、phase完成条件；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H18-s3",
+          "title": "CUDA · Asynchronous Data Copies",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/async-copies.html",
+          "kind": "official",
+          "note": "§4.13.1 LDGSTS的完成机制和跨线程消费；§4.13.2 TMA；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H18-s4",
+          "title": "CUDA · Pipelines",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/pipelines.html",
+          "kind": "official",
+          "note": "§4.12 producer_acquire/commit与consumer_wait/release，以及warp entanglement；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H18-s5",
+          "title": "NCU · Profiling Guide",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "Occupancy、SourceCounters、MemoryWorkloadAnalysis；stall采样需结合吞吐与源码位置；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "MemoryWorkloadAnalysis（section）",
+          "meaning": "比较普通load/store与async路径的global/shared流量和请求，确认优化没有额外搬运或重复读取。",
+          "caveat": "相同字节量也可能因更好的重叠而加速；不能只靠流量减少判断async是否有效。",
+          "sourceId": "H18-s5"
+        },
+        {
+          "name": "Occupancy / LaunchStats（sections）",
+          "meaning": "增加stage后检查shared memory和寄存器占用、理论与实际驻留变化。",
+          "caveat": "更深流水会增加资源需求；occupancy下降不自动表示更慢，应与总时间和等待对照。",
+          "sourceId": "H18-s5"
+        },
+        {
+          "name": "SourceCounters（section）",
+          "meaning": "检查消费者等待点及相关stall样本，结合SASS确认是否用了预期的异步搬运指令。",
+          "caveat": "采样比例不是所有SM共同损失的时钟；未提供跨GPU通用的“async overlap百分比”。",
+          "sourceId": "H18-s5"
+        }
+      ],
+      "walkthrough": {
+        "title": "双缓冲：谁现在拥有 buffer？",
+        "assumption": "一个producer与一个consumer，buffer0/1循环使用。每步仅表示同步事件后的快照；完成→通知→消费→释放依次发生，箭头不表示固定时钟。",
+        "nodes": [
+          {
+            "id": "P",
+            "label": "Producer",
+            "kind": "compute"
+          },
+          {
+            "id": "B0",
+            "label": "Buffer 0",
+            "kind": "data"
+          },
+          {
+            "id": "B1",
+            "label": "Buffer 1",
+            "kind": "data"
+          },
+          {
+            "id": "C",
+            "label": "Consumer",
+            "kind": "compute"
+          }
+        ],
+        "steps": [
+          {
+            "title": "取得空buffer",
+            "explanation": "producer获得B0所有权并发起tile0搬运，消费者不能读取。",
+            "active": [
+              "P",
+              "B0"
+            ],
+            "values": {
+              "P": "发起 tile0",
+              "B0": "FILLING",
+              "B1": "EMPTY",
+              "C": "等待 tile0"
+            },
+            "edges": [
+              {
+                "from": "P",
+                "to": "B0",
+                "label": "tile0搬运"
+              }
+            ]
+          },
+          {
+            "title": "tile0 已完成",
+            "explanation": "完成条件满足后，B0发布为READY；消费者获取B0。",
+            "active": [
+              "B0",
+              "C"
+            ],
+            "values": {
+              "P": "可准备 tile1",
+              "B0": "READY → READING",
+              "B1": "EMPTY",
+              "C": "开始 tile0"
+            },
+            "edges": [
+              {
+                "from": "B0",
+                "to": "C",
+                "label": "已完成数据"
+              }
+            ]
+          },
+          {
+            "title": "有用的重叠",
+            "explanation": "消费者读取B0时，producer只向空闲B1搬运tile1。",
+            "active": [
+              "P",
+              "B1",
+              "C"
+            ],
+            "values": {
+              "P": "发起 tile1",
+              "B0": "READING",
+              "B1": "FILLING",
+              "C": "计算 tile0"
+            },
+            "edges": [
+              {
+                "from": "P",
+                "to": "B1",
+                "label": "tile1搬运"
+              },
+              {
+                "from": "B0",
+                "to": "C",
+                "label": "tile0操作数"
+              }
+            ]
+          },
+          {
+            "title": "交换所有权",
+            "explanation": "tile0消费结束释放B0；tile1搬运完成才使B1可读。",
+            "active": [
+              "B0",
+              "B1",
+              "C"
+            ],
+            "values": {
+              "P": "获得 B0",
+              "B0": "EMPTY",
+              "B1": "READY → READING",
+              "C": "开始 tile1"
+            },
+            "edges": [
+              {
+                "from": "C",
+                "to": "B0",
+                "label": "释放"
+              },
+              {
+                "from": "B1",
+                "to": "C",
+                "label": "tile1"
+              }
+            ]
+          },
+          {
+            "title": "循环复用",
+            "explanation": "B0可用于tile2；不能在上一消费者释放之前覆盖它。",
+            "active": [
+              "P",
+              "B0",
+              "C"
+            ],
+            "values": {
+              "P": "发起 tile2",
+              "B0": "FILLING",
+              "B1": "READING",
+              "C": "计算 tile1"
+            },
+            "edges": [
+              {
+                "from": "P",
+                "to": "B0",
+                "label": "tile2搬运"
+              },
+              {
+                "from": "B1",
+                "to": "C",
+                "label": "tile1操作数"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "stage数与等待位置（实验设计，未执行）",
+        "change": "对同一tile算法比较1、2、3个stage；保持输入、输出和每tile搬运字节不变，记录实际资源使用。",
+        "expect": "搬运与计算相当且存在可重叠窗口时，多stage可能缩短稳态时间；供数已够或驻留骤降时不再受益。",
+        "measure": "先做数值和race检查，再记录CUDA event时间、SASS、shared/RF占用、NCU内存流量与等待位置；单独看prologue和drain。",
+        "confounds": "错误的barrier phase、等待太早、buffer提前复用、边界清零、编译器生成同步拷贝、计时窗口过短。"
+      },
+      "atoms": [
+        {
+          "id": "H18.01",
+          "question": "cp.async 改变了 global→shared 的哪一段路径？",
+          "explain": [
+            "普通线程代码经常先把global数据load到通用寄存器，再store到shared。SM80+的经典cp.async允许发起global到shared的异步拷贝，避免把整份搬运数据先作为普通寄存器中间值持有，线程可在完成前做独立工作。",
+            "它不取消地址生成、对齐、缓存和带宽限制，也不保证一次API调用必然编译成该路径。目标类型、拷贝尺寸、编译目标和库实现都要检查。RF压力下降与重叠改善是两种可能收益，应分别验证，不能只比较源码行数。"
+          ],
+          "example": "一个线程将16字节搬到shared用于后续计算：普通路径可能占用中间数据寄存器；cp.async完成后消费者直接从shared读取。",
+          "pitfall": "把cp.async解释成完全不使用任何寄存器或不经过缓存/内存子系统。",
+          "check": {
+            "question": "用异步API后寄存器数没下降，是否一定没有优化？",
+            "answer": "不一定。寄存器分配可能由其他活跃值决定，且收益也可能来自重叠；需检查SASS和耗时。"
+          },
+          "state": "global源、shared目的、地址/对齐信息和未完成拷贝。",
+          "transition": "发起请求后目的数据仍不可消费，完成并同步后才能读取。",
+          "prediction": "如果原先中间值压力显著，异步路径可能减小RF占用并增加重叠机会。",
+          "sourceIds": [
+            "H18-s1",
+            "H18-s3"
+          ]
+        },
+        {
+          "id": "H18.02",
+          "question": "指令已经发出去，为什么还不能读 shared 目的地址？",
+          "explain": [
+            "异步发起意味着提交工作与工作完成分离。执行线程继续前进时，数据可能仍在访问global或写入shared；目的地址即使存在，也不代表其中的新数据已对消费者可见，必须使用对应的完成机制。",
+            "经典cp.async group默认由发起线程跟踪。若tile由多个线程共同搬运并由其他线程读取，各线程等到自己的拷贝完成还不够，通常还需CTA或正确作用域的协作同步。不要把线程局部完成错误扩大成全block完成。"
+          ],
+          "example": "线程0的copy完成，但线程1的copy仍在途；线程0若直接读取整个tile，会提前消费线程1负责的区域。",
+          "pitfall": "只加普通__syncthreads而不先建立async拷贝完成条件，或只wait自己的copy就消费所有线程数据。",
+          "check": {
+            "question": "消费者与producer不同线程时，要检查哪两类条件？",
+            "answer": "异步工作是否完成，以及完成结果是否通过正确的跨线程同步交给消费者。"
+          },
+          "state": "发起者、目的buffer、pending拷贝与消费者范围。",
+          "transition": "完成事件使数据可交付，范围正确的同步再允许消费者使用。",
+          "prediction": "过早读取可能偶尔看似正确，但加负载或变时序后会暴露数据竞争。",
+          "sourceIds": [
+            "H18-s1",
+            "H18-s3"
+          ]
+        },
+        {
+          "id": "H18.03",
+          "question": "commit_group 是把数据搬完，还是给工作划分边界？",
+          "explain": [
+            "cp.async.commit_group把当前线程此前已发起但尚未提交的cp.async组成一个新group。它建立的是完成跟踪边界，不等待数据返回；空group也有定义，组内多个copy之间并没有因为commit就形成逐条内存顺序。",
+            "组的粒度决定后续wait能够保留多少新工作在途。工程上常按tile或stage组织，但程序必须自行建立group与buffer的关系。CUDA高层pipeline还存在warp entanglement，分歧commit可能造成过度等待，不能简单把逻辑线程批次当成独立硬件队列。"
+          ],
+          "example": "线程先发起copyA和copyB，再commit形成G0；随后copyC再commit为G1。G0/G1都可能在途，commit本身没有消费任何数据。",
+          "pitfall": "把commit当作flush或完成barrier，并认为同组对同一目的地址多次copy有确定覆盖顺序。",
+          "check": {
+            "question": "commit之后pending group数量是否一定为零？",
+            "answer": "不是，它通常增加一个已提交group；完成要由后续wait或barrier确认。"
+          },
+          "state": "每线程未提交copy集合、已提交group序列与buffer映射。",
+          "transition": "commit把未提交集合封装成新group，不改变copy已经完成与否。",
+          "prediction": "把commit推迟或分歧化可能改变等待行为，但不自动提高有效重叠。",
+          "sourceIds": [
+            "H18-s1",
+            "H18-s4"
+          ]
+        },
+        {
+          "id": "H18.04",
+          "question": "wait_group 1 是等待第1组吗？",
+          "explain": [
+            "cp.async.wait_group N的N不是组编号；它限制仍允许pending的最近group数量。执行线程要等到更早的group完成，直到最多只剩最近N组尚未完成。N=0表示等待此前已提交的所有group完成。",
+            "这只建立相应cp.async工作的完成和可见性，不替代对任意普通load/store的内存排序。它也不会把未提交copy自动纳入已提交group；wait_all才包含commit加wait0的语义。多线程共同供数还必须建立合适的线程间同步。"
+          ],
+          "example": "已提交G0、G1、G2，wait_group 1返回时G0/G1必须完成，G2仍可能pending；此时只能消费对应已完成buffer。",
+          "pitfall": "把N当作group ID，或wait_group后读取一个尚未commit的copy目的地。",
+          "check": {
+            "question": "G0、G1两组之后wait_group 1，G1数据保证可读吗？",
+            "answer": "不保证；它允许最新的G1仍pending，保证的是较早group按规则完成。"
+          },
+          "state": "已提交group的时间顺序、N和buffer所属group。",
+          "transition": "等待较早group完成，保留最多N个最近group在途。",
+          "prediction": "适当保留新group在途可创造重叠；过早wait0会把流水线串行化。",
+          "sourceIds": [
+            "H18-s1",
+            "H18-s3"
+          ]
+        },
+        {
+          "id": "H18.05",
+          "question": "双缓冲的核心是两个数组，还是两套所有权？",
+          "explain": [
+            "两个buffer只有在生命周期分离时才形成流水：producer只能写EMPTY/FREE的buffer，consumer只能读READY且完成同步的buffer。consumer结束最后一次使用后释放所有权，producer才可覆盖旧数据。",
+            "因此“拷贝已完成”和“buffer可复用”不是同一事件。前者允许开始消费，后者要求所有消费者已停止读取；异步MMA可能在发起后仍读取shared操作数，所以不能仅以MMA发射作为释放时刻。应由该家族规定的完成协议判定。"
+          ],
+          "example": "B0供当前tile计算，B1填充下一tile；当前计算完成且不再读B0后，B0才用于下下个tile。",
+          "pitfall": "在异步MMA刚发起时立即覆盖其shared输入，认为已发射等于已消费完。",
+          "check": {
+            "question": "READY buffer能立即交还producer吗？",
+            "answer": "不能。READY表示可消费，只有consumer完成全部读取后才可FREE。"
+          },
+          "state": "每buffer的EMPTY/FILLING/READY/READING状态和代次。",
+          "transition": "空闲→填充→完成→消费→释放，复用必须经过完整生命周期。",
+          "prediction": "缺少释放握手的双缓冲可能在某些尺寸正确、另一些尺寸出现随机误差。",
+          "sourceIds": [
+            "H18-s4",
+            "H18-s1"
+          ]
+        },
+        {
+          "id": "H18.06",
+          "question": "把stage从2加到4，为什么可能更慢？",
+          "explain": [
+            "更多stage增加可在途的tile数量，理论上给较长搬运延迟提供更大的计算覆盖窗口。但稳态吞吐上限仍由计算或搬运资源决定；如果现有stage已经足够供数，继续增加不会提高该上限。",
+            "每个stage消耗shared、barrier状态，有时还延长寄存器活跃区间。资源占用增加可能减少驻留CTA、加重尾部或增加prologue/drain成本。因此stage数应结合tile耗时与资源台阶测量，不能用固定公式替代实际验证。"
+          ],
+          "example": "每tile占用24KiB shared，2 stage为48KiB，4 stage为96KiB；在某设备上这可能跨过驻留台阶，损失其他CTA提供的并发。",
+          "pitfall": "认为stage越深越接近峰值，忽略容量和短K循环的启动成本。",
+          "check": {
+            "question": "只有2个K tile时，设计6-stage流水通常有什么问题？",
+            "answer": "大部分容量无法形成稳态重叠，初始化、等待和资源占用可能得不偿失。"
+          },
+          "state": "stage数、每stage字节、计算间隔、搬运延迟和驻留上限。",
+          "transition": "增加stage扩大可在途窗口，同时提高每CTA资源需求。",
+          "prediction": "在依赖等待下降之前可能受益，超过覆盖需要或资源台阶后可能退化。",
+          "sourceIds": [
+            "H18-s4",
+            "H18-s5"
+          ]
+        },
+        {
+          "id": "H18.07",
+          "question": "arrival 已经归零，mbarrier 为什么还没完成？",
+          "explain": [
+            "mbarrier跟踪当前phase的到达条件；从Hopper起还可通过tx-count跟踪异步事务完成量。以TMA字节完成机制为例，expect-tx增加期望字节，硬件完成相应搬运后complete-tx减少它；线程arrival与字节完成是两种独立条件。",
+            "一个phase需要pending arrivals和tx-count都归零才能完成并进入下一phase。消费者必须等待正确phase/token；buffer循环复用时还要同步更新代次。错误的期望字节数、漏到达或等待旧phase都可能导致死锁或提前消费。"
+          ],
+          "example": "barrier等待1次arrival与4096字节：线程arrive后arrival=0，但仍有4096字节pending；搬运完成令tx=0，phase才结束。",
+          "pitfall": "把arrival次数与搬运字节数混为一个计数，或认为phase变化本身表示buffer已被消费完。",
+          "check": {
+            "question": "arrival=0、tx=1024时消费者可以继续吗？",
+            "answer": "不可以，该phase仍有异步事务未完成。"
+          },
+          "state": "phase、expected/pending arrival计数、tx-count与等待token。",
+          "transition": "到达和事务完成分别减少对应计数，两者归零后原子切换phase。",
+          "prediction": "漏报或多报完成量会破坏等待协议，即使线程都已到达也可能卡住。",
+          "sourceIds": [
+            "H18-s2",
+            "H18-s3"
+          ]
+        },
+        {
+          "id": "H18.08",
+          "question": "普通 shared store 和异步单元读取之间为什么还需要 proxy 顺序？",
+          "explain": [
+            "PTX把不同访问机制区分为proxy。普通线程的generic访问与异步操作对同一shared位置的访问，并不总能仅靠程序顺序建立所需可见性；适用场景要通过fence.proxy.async等规定机制连接两种proxy。",
+            "proxy fence建立访问顺序，不等价于等待异步操作完成，也不自动让不同线程彼此到达。正确协议要同时解决三个问题：producer数据如何发布给async单元、异步工作何时完成、consumer线程如何得知并安全复用。不同指令家族需按各自文档组合。"
+          ],
+          "example": "线程普通store写入WGMMA的shared操作数后，按要求做async proxy fence，再发MMA；在消费MMA结果前仍需该家族的完成等待。",
+          "pitfall": "把一个proxy fence当成“所有线程、所有拷贝和所有MMA均完成”的万能屏障。",
+          "check": {
+            "question": "已有__syncthreads时，是否总能删除proxy fence？",
+            "answer": "不能。线程同步与跨proxy排序承担不同职责，必须按访问组合检查文档。"
+          },
+          "state": "generic写、async读、对应proxy及完成/线程同步机制。",
+          "transition": "先建立跨proxy顺序，再发异步工作，最后等待完成并移交所有权。",
+          "prediction": "删除必要fence可能产生时序相关错误，而不是仅仅改变性能。",
+          "sourceIds": [
+            "H18-s2",
+            "H18-s3"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H19",
+      "kicker": "HOPPER & BLACKWELL",
+      "question": "新架构怎样把“搬运、计算、协作”拆成可独立推进的工作？",
+      "summary": "明确TMA、WGMMA、TMEM和tcgen05的职责与完成协议，理解warp specialization、cluster与调度边界。",
+      "scope": "Hopper以SM90/SM90a为范围，Blackwell矩阵专题限定SM100类tcgen05目标；PTX语义固定参考CUDA12.8/PTX8.7，不声称代表所有Blackwell SKU或最新指令。CLC按CC10.0介绍。",
+      "prerequisites": [
+        "H15 同步与内存顺序",
+        "H17 Tensor Core",
+        "H18 异步流水"
+      ],
+      "sources": [
+        {
+          "id": "H19-s1",
+          "title": "NVIDIA Hopper Tuning Guide",
+          "url": "https://docs.nvidia.com/cuda/hopper-tuning-guide/",
+          "kind": "official",
+          "note": "TMA、Thread Block Clusters、DSM与cluster occupancy；具体产品参数不泛化；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H19-s2",
+          "title": "PTX ISA 8.7 · WGMMA / tcgen05 / setmaxnreg",
+          "url": "https://docs.nvidia.com/cuda/archive/12.8.0/parallel-thread-execution/index.html",
+          "kind": "official",
+          "note": "§9.7.15、§9.7.16、§9.7.19.5；执行粒度、完成协议、目标架构；tensor copy见§9.7.9.25；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H19-s3",
+          "title": "NVIDIA Blackwell Tuning Guide",
+          "url": "https://docs.nvidia.com/cuda/blackwell-tuning-guide/",
+          "kind": "official",
+          "note": "区分CC10.0与CC12.0资源，不把Blackwell品牌当单一架构配置；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H19-s4",
+          "title": "CUTLASS v4.2.1 · mma_sm100_umma.hpp",
+          "url": "https://github.com/NVIDIA/cutlass/blob/v4.2.1/include/cute/arch/mma_sm100_umma.hpp",
+          "kind": "official",
+          "note": "已读SM100_MMA_F16BF16_SS::fma及SM100_MMA_F16BF16_2x1SM_SS::fma；elect_one_sync、descriptor参数与cta_group::2；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H19-s5",
+          "title": "CUDA · Cluster Launch Control",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cluster-launch-control.html",
+          "kind": "official",
+          "note": "§4.14；try_cancel未开始CTA/cluster、异步结果与失败处理；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H19-s6",
+          "title": "NCU · Tensor MMA Interpretation",
+          "url": "https://docs.nvidia.com/nsight-compute/ComputeTriage/",
+          "kind": "official",
+          "note": "§3.4.6；WGMMA/tcgen05计数、供数与流水解释；精确指标随架构query；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "ComputeWorkloadAnalysis / InstructionStats（sections）",
+          "meaning": "确认使用WGMMA还是tcgen05，以及Tensor计算路径是否忙碌；把逻辑MMA次数和warp级指令计数分开。",
+          "caveat": "Hopper warpgroup逻辑操作和Blackwell单线程发起的计数含义不同；不能按活跃线程数低就判定浪费。",
+          "sourceId": "H19-s6"
+        },
+        {
+          "name": "MemoryWorkloadAnalysis（section）",
+          "meaning": "对照预期tile字节检查TMA供数、shared路径及目标设备提供的TMEM相关观测。",
+          "caveat": "TMA/TMEM指标支持随设备版本变化；先query，不假定一个计数器能证明所有proxy与barrier正确。",
+          "sourceId": "H19-s6"
+        },
+        {
+          "name": "Occupancy / LaunchStats（sections）",
+          "meaning": "结合寄存器、shared、cluster尺寸与TMEM分配评估可驻留工作，比较shape/CTA-group取舍。",
+          "caveat": "SM占用率不能代替cluster可驻留数；tmemory容量、tile布局与架构专属限制需另核对。",
+          "sourceId": "H19-s6"
+        }
+      ],
+      "walkthrough": {
+        "title": "SM100：一次异步MMA的生命周期",
+        "assumption": "单CTA、A/B在shared、D在TMEM。准备阶段包含合法的布局、TMEM分配及所需proxy同步；只画事件顺序，不模拟真实周期。",
+        "nodes": [
+          {
+            "id": "S",
+            "label": "Shared A/B",
+            "kind": "data"
+          },
+          {
+            "id": "I",
+            "label": "发起线程",
+            "kind": "compute"
+          },
+          {
+            "id": "T",
+            "label": "Tensor执行",
+            "kind": "compute"
+          },
+          {
+            "id": "D",
+            "label": "TMEM D",
+            "kind": "state"
+          },
+          {
+            "id": "C",
+            "label": "结果消费者",
+            "kind": "compute"
+          }
+        ],
+        "steps": [
+          {
+            "title": "输入与存储已准备",
+            "explanation": "shared操作数已完成搬运并满足proxy顺序，TMEM已合法分配。",
+            "active": [
+              "S",
+              "D"
+            ],
+            "values": {
+              "S": "READY",
+              "I": "可发起",
+              "T": "空闲",
+              "D": "已分配",
+              "C": "等待结果"
+            },
+            "edges": []
+          },
+          {
+            "title": "单线程发起",
+            "explanation": "选出的线程发tcgen05.mma，开始整块矩阵操作；发起返回不等于D可读。",
+            "active": [
+              "I",
+              "T"
+            ],
+            "values": {
+              "S": "保持有效",
+              "I": "MMA已发起",
+              "T": "IN FLIGHT",
+              "D": "更新未完成",
+              "C": "不可读"
+            },
+            "edges": [
+              {
+                "from": "I",
+                "to": "T",
+                "label": "tcgen05.mma"
+              },
+              {
+                "from": "S",
+                "to": "T",
+                "label": "操作数"
+              }
+            ]
+          },
+          {
+            "title": "登记完成通知",
+            "explanation": "tcgen05.commit让此前相关操作完成后对mbarrier发出通知。",
+            "active": [
+              "I",
+              "T"
+            ],
+            "values": {
+              "S": "仍按协议保护",
+              "I": "commit已发起",
+              "T": "进行中",
+              "D": "未交付",
+              "C": "等待phase"
+            },
+            "edges": [
+              {
+                "from": "I",
+                "to": "T",
+                "label": "关联mbarrier"
+              }
+            ]
+          },
+          {
+            "title": "完成并等待成功",
+            "explanation": "MMA完成，关联barrier条件满足；消费者等待正确phase成功后执行要求的tcgen05顺序fence。",
+            "active": [
+              "T",
+              "D",
+              "C"
+            ],
+            "values": {
+              "S": "可按协议释放",
+              "I": "可做其他工作",
+              "T": "已完成",
+              "D": "结果READY",
+              "C": "等待成功 + fence"
+            },
+            "edges": [
+              {
+                "from": "T",
+                "to": "D",
+                "label": "写入完成"
+              },
+              {
+                "from": "D",
+                "to": "C",
+                "label": "完成通知"
+              }
+            ]
+          },
+          {
+            "title": "读回与释放",
+            "explanation": "消费者用tcgen05.ld读TMEM并执行相应wait；结果使用完毕后按规则释放TMEM。",
+            "active": [
+              "D",
+              "C"
+            ],
+            "values": {
+              "S": "可复用",
+              "I": "下一tile",
+              "T": "空闲",
+              "D": "读回后释放",
+              "C": "寄存器epilogue"
+            },
+            "edges": [
+              {
+                "from": "D",
+                "to": "C",
+                "label": "tcgen05.ld / wait"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "按设备分开比较供数和MMA（实验设计，未执行）",
+        "change": "Hopper比较相同shape的同步供数与TMA+WGMMA流水；SM100单独比较合法1CTA/2CTA tcgen05方案，保持精度与输出一致。",
+        "expect": "只有形成实际重叠或复用、且资源代价可接受时才会受益；跨架构不能用单个百分比归因于某条新指令。",
+        "measure": "记录设备CC、CUDA/PTX/CUTLASS版本、SASS、布局和stage；先验证误差及边界，再测时间、供数字节、Tensor与资源占用。",
+        "confounds": "不同tile有效算量、TMEM/SMEM驻留台阶、不同epilogue、初始化/descriptor成本、短K尾部与不正确的完成协议。"
+      },
+      "atoms": [
+        {
+          "id": "H19.01",
+          "question": "TMA tensor map 帮线程省掉了哪些工作？",
+          "explain": [
+            "tensor map描述global张量的基地址、维度、步幅、类型和tile布局等信息。线程发出坐标与目标shared位置后，TMA按描述计算并搬运一块数据，使大量逐元素地址算术与搬运发射不必由每个lane分别完成。",
+            "它是有约束的张量传输机制，不是任意指针gather的万能加速器。descriptor的步幅、对齐、swizzle与目的布局必须相容；构建或更新descriptor本身也有成本和可见性要求，需结合tile复用与kernel长度判断收益。"
+          ],
+          "example": "同一个二维矩阵的多个tile共用一个tensor map，每次只给出不同起始坐标，而不是为每个元素重新算完整地址。",
+          "pitfall": "把TMA描述符当成数据本身，或认为更换任意stride后原descriptor仍然有效。",
+          "check": {
+            "question": "输入张量leading dimension改变时，为什么要检查tensor map？",
+            "answer": "它编码了地址计算规则；旧stride可能把正确坐标映射到错误地址。"
+          },
+          "state": "tensor map、tile坐标、shared目标和合法布局参数。",
+          "transition": "发起坐标式搬运，TMA按描述生成对应地址与数据传输。",
+          "prediction": "若原本地址计算和搬运发射开销高，TMA可能降低这些开销；小tile未必划算。",
+          "sourceIds": [
+            "H19-s1",
+            "H19-s2"
+          ]
+        },
+        {
+          "id": "H19.02",
+          "question": "TMA load 的完成如何传递给消费者？",
+          "explain": [
+            "global→shared的TMA tensor load可采用mbarrier complete_tx字节完成机制。producer在正确初始化和phase中登记预期事务量并发起搬运；只有到达计数和事务计数都完成，消费者对该phase的等待才能成功。",
+            "不要把TMA load的barrier协议与shared→global的bulk-group完成机制混为一谈。消费者还必须保护buffer的代次和复用时机；它得到“输入已到齐”的许可后，后续异步MMA仍有自己独立的完成条件。"
+          ],
+          "example": "tile有8192字节，barrier按这轮协议期待8192字节。仅线程arrive完成时不能开算，TMA写完并完成对应事务后才可交付。",
+          "pitfall": "只等待producer线程执行到某一行，就认为TMA已经把tile写完。",
+          "check": {
+            "question": "TMA输入ready后，MMA输出是否同时ready？",
+            "answer": "不是。输入搬运完成只允许启动计算，计算还有另一条完成链。"
+          },
+          "state": "tile字节、barrier phase、arrival与tx-count。",
+          "transition": "搬运完成递减事务计数，完整phase完成后消费者获得输入。",
+          "prediction": "错误的期望字节或phase会表现为等待卡住或读错轮次，而不是普通性能抖动。",
+          "sourceIds": [
+            "H19-s2",
+            "H19-s1"
+          ]
+        },
+        {
+          "id": "H19.03",
+          "question": "TMA multicast 是给多个CTA共享一个指针吗？",
+          "explain": [
+            "TMA multicast可把一次请求的输入tile送到同一cluster内被mask选择的多个CTA各自的shared目的位置。它面向数据复制和复用，接收CTA仍拥有自己的shared空间与完成协议，并不是把它们变成一个普通共享指针。",
+            "收益来自减少重复的外部供数或发起开销，但具体流量下降取决于缓存状态和硬件路径。接收方的buffer位置、barrier设置、参与mask和存活条件必须满足指令要求；不能推广成任意SM之间的跨cluster广播。"
+          ],
+          "example": "一组CTA计算不同N切片但复用同一A tile，可研究把A送往多个接收shared buffer，再各自消费不同B。",
+          "pitfall": "把multicast的接收数量直接乘成固定带宽加速倍数。",
+          "check": {
+            "question": "发送CTA完成后，接收CTA能否忽略自己的同步协议直接读？",
+            "answer": "不能，必须按该multicast指令的完成与可见性规则等待正确buffer。"
+          },
+          "state": "cluster参与mask、各CTA shared目的buffer和完成状态。",
+          "transition": "一次tile传输向选定接收者复制数据，接收者按协议等待后消费。",
+          "prediction": "复用程度高时可能减少重复供数，但新增协作和驻留限制也可能抵消收益。",
+          "sourceIds": [
+            "H19-s2",
+            "H19-s1"
+          ]
+        },
+        {
+          "id": "H19.04",
+          "question": "WGMMA 的 fence、commit、wait 分别解决什么？",
+          "explain": [
+            "Hopper sm_90a的WGMMA由warpgroup协作发起。wgmma.fence建立规定的寄存器访问顺序；涉及generic shared写时还需相应async proxy顺序。mma_async发起计算，commit_group把已发起操作划入完成跟踪组。",
+            "wait_group按允许的pending组数等待旧组完成，之后才可按规范消费结果或复用仍被读取的输入。wgmma.fence不是完成等待，commit也不是结果ready。四个warp及其参与线程必须满足collective一致性要求。"
+          ],
+          "example": "发起一组MMA后先做不依赖结果的地址计算，随后wait_group 0再把accumulator用于epilogue；这样才保留异步窗口。",
+          "pitfall": "发完mma_async立刻读取累加器，或者把wgmma.fence当成结果完成barrier。",
+          "check": {
+            "question": "为什么“commit后马上wait0”可能正确却没有重叠收益？",
+            "answer": "它立即关闭了可做独立工作的窗口，计算与其他工作仍趋于串行。"
+          },
+          "state": "warpgroup、寄存器/共享操作数、pending MMA groups。",
+          "transition": "建立顺序→一致发起→提交group→等待指定旧组完成→消费。",
+          "prediction": "延后等待到真正依赖点可能提高重叠，但必须保持操作数生命周期。",
+          "sourceIds": [
+            "H19-s2"
+          ]
+        },
+        {
+          "id": "H19.05",
+          "question": "warp specialization 解决的是分支发散，还是职责分离？",
+          "explain": [
+            "warp specialization让不同warp承担不同阶段，例如producer准备TMA，consumer执行矩阵计算，epilogue处理结果。它利用异步引擎和不同资源需求，让阶段在不同warp上同时推进；不是把一个warp里的lane随意拆成不同MMA参与者。",
+            "职责分离带来跨warp的buffer所有权、到达计数和phase管理。producer过少会供数不足，过多又占用驻留和发射资源。WGMMA consumer还必须保持完整warpgroup；角色应随tile、数据类型和设备改变，不能固定套一个比例。"
+          ],
+          "example": "一个producer warp负责发下一tile的TMA，consumer warpgroup计算当前tile；用full/empty信号控制每个stage的交接。",
+          "pitfall": "认为不同warp执行不同代码天然获得独立资源且无同步成本。",
+          "check": {
+            "question": "consumer一直等full barrier，应该只增加consumer吗？",
+            "answer": "不应盲目增加。先检查producer供数、TMA流量和barrier协议，可能是供给不足。"
+          },
+          "state": "warp角色、stage所有权、full/empty完成信号。",
+          "transition": "producer发布ready tile，consumer消费并释放，双方在不同stage推进。",
+          "prediction": "平衡职责可改善重叠；不平衡会把等待集中到某一角色。",
+          "sourceIds": [
+            "H19-s1",
+            "H19-s2",
+            "H19-s6"
+          ]
+        },
+        {
+          "id": "H19.06",
+          "question": "setmaxnreg 能把空闲SM的寄存器借给另一个block吗？",
+          "explain": [
+            "PTX setmaxnreg调整执行warp的每线程最大寄存器额度，并通过同一CTA的寄存器池释放或申请额度。dec可把不用的尾部寄存器归还池，inc请求更多；若池里不够，inc会阻塞，不是凭空增加物理容量。",
+            "同一warpgroup必须一致执行并遵循后续同步规则，编译和launch也要提供适用的资源配置。新增寄存器内容未定义，需要初始化；释放前还要保证对应值已不再使用。它适合producer/consumer不同需求，不是跨CTA或跨SM资源迁移。"
+          ],
+          "example": "低寄存器需求的producer释放一部分额度，consumer在同CTA池中申请更多accumulator空间；若双方先inc而无人释放，可能无法推进。",
+          "pitfall": "把setmaxnreg当成改变整个SM寄存器总数的动态扩容指令。",
+          "check": {
+            "question": "inc一定立即成功吗？",
+            "answer": "不一定；它等待CTA池里有足够额度，且调用必须满足规定的参与与配置条件。"
+          },
+          "state": "每warp额度、CTA寄存器池、活跃尾部值。",
+          "transition": "dec归还额度，inc从同CTA池申请；分配不足时等待。",
+          "prediction": "职责差异大时可改善资源分配，但错误的申请/释放顺序可能阻塞。",
+          "sourceIds": [
+            "H19-s2"
+          ]
+        },
+        {
+          "id": "H19.07",
+          "question": "cluster 的 DSM 是“更大的shared”，还是一种受约束的远端访问？",
+          "explain": [
+            "Thread Block Cluster保证成员以协作方式调度到规定的硬件范围，使CTA能够访问cluster成员的shared memory。DSM仍由各block的shared分片组成，远端访问需要正确寻址和同步；数据的生命周期依赖拥有它的CTA。",
+            "cluster尺寸会影响可同时驻留的cluster数，不能把单SM occupancy简单相加。开始远端访问前要保证成员及其存储已准备，成员退出前要保证远端使用已结束。可移植最大尺寸与特定GPU的opt-in尺寸要分开处理。"
+          ],
+          "example": "两个CTA各有一份局部直方图，先完成初始化和cluster同步，再访问彼此分片；所有远端访问结束后再允许成员退出。",
+          "pitfall": "把DSM当成全GPU共享且在block退出后仍有效的低延迟内存。",
+          "check": {
+            "question": "某成员早退后，其他成员还能安全使用它的shared分片吗？",
+            "answer": "不能依赖这种行为；必须在生命周期结束前完成所有远端访问。"
+          },
+          "state": "cluster成员、shared分片、准备/退出同步及可驻留cluster数。",
+          "transition": "成员共同准备后进行DSM访问，全部远端使用完成后才结束生命周期。",
+          "prediction": "扩大cluster可能增强复用，也可能降低并发与负载均衡。",
+          "sourceIds": [
+            "H19-s1",
+            "H19-s3"
+          ]
+        },
+        {
+          "id": "H19.08",
+          "question": "SM100 Tensor Memory 为什么不能当普通寄存器或shared数组使用？",
+          "explain": [
+            "TMEM是SM100类Tensor指令使用的专用片上存储，tcgen05的accumulator直接位于其中；部分A操作数也可以来自TMEM。它有专门的地址、分配和搬运指令，不是可用普通global/shared指针随意load的内存。",
+            "程序要按规则分配列、使用、等待相关操作完成并释放。TMEM alloc/dealloc是warp协作操作，和单线程发起MMA不同；分配许可与释放存储也有不同含义。容量和生命周期可能限制并发，不能因RF压力降低就忽视TMEM预算。"
+          ],
+          "example": "同一CTA先分配accumulator的TMEM区域，MMA在其中累加，之后tcgen05.ld读入寄存器做epilogue，最后合法dealloc。",
+          "pitfall": "把“释放allocation permit”当成已经释放所有TMEM存储，或用普通ld.shared读TMEM。",
+          "check": {
+            "question": "为什么一个线程能发MMA，却不能据此让一个线程执行所有TMEM管理操作？",
+            "answer": "不同tcgen05操作具有不同执行粒度；alloc/dealloc有明确warp参与要求。"
+          },
+          "state": "TMEM分配区域、列数、许可、未完成使用者。",
+          "transition": "按规定分配→计算/读回→完成同步→释放，不能在仍使用时复用。",
+          "prediction": "大accumulator可减轻RF压力，但TMEM容量和读回成本可能成为新约束。",
+          "sourceIds": [
+            "H19-s2",
+            "H19-s4"
+          ]
+        },
+        {
+          "id": "H19.09",
+          "question": "tcgen05.mma 单线程发起，是否只做一个线程的计算？",
+          "explain": [
+            "SM100类tcgen05.mma的发起语义是单线程，但它触发的是整个M×N×K矩阵操作。指令描述符指定形状和类型，A可来自shared描述符或TMEM，B来自shared，累加结果在TMEM；工作规模不由发起lane数决定。",
+            "它是异步操作，结果消费需按tcgen05的commit、mbarrier和顺序fence协议建立完成关系；TMEM load也有自己的等待规则。CUTLASS的对应fma封装用elect_one_sync选发起线程，但外围分配、供数和同步仍由协作线程完成。"
+          ],
+          "example": "源码只看到一个被选中的lane发tcgen05，并不表示其他lane浪费；它们可能负责供数、读回或epilogue，Tensor控制路径在执行整块工作。",
+          "pitfall": "将warp-level mma.sync的32线程发起方式原样复制到tcgen05，使同一操作被重复发起。",
+          "check": {
+            "question": "发起线程的active-thread计数很低，是否可以直接判定Tensor没有吃满？",
+            "answer": "不能，要看指令家族、Tensor吞吐和整体流水；单线程发起是规定语义。"
+          },
+          "state": "instruction descriptor、A/B地址、TMEM D、完成barrier。",
+          "transition": "单线程提交tile操作，异步完成后通过规定协议允许结果读取。",
+          "prediction": "发起指令很少仍可能驱动大量计算；发射率与FLOPs不能直接等同。",
+          "sourceIds": [
+            "H19-s2",
+            "H19-s4",
+            "H19-s6"
+          ]
+        },
+        {
+          "id": "H19.10",
+          "question": "cta_group::2 表示任意两个block都能一起做MMA吗？",
+          "explain": [
+            "tcgen05的双CTA模式使用规定的peer CTA协作，操作可涉及两者的shared输入和TMEM结果。它依赖合法cluster、配对、形状及布局，不能把两个任意block的指针拼到描述符里就获得跨SM矩阵乘法。",
+            "操作的发起粒度与资源管理也不同：MMA仍由规定的单线程发起，双CTA TMEM分配/释放需要双方对应warp协作，peer必须已启动且仍存活。更大tile增加复用机会，也可能加重边界浪费、同步和驻留约束。"
+          ],
+          "example": "CUTLASS v4.2.1的SM100_MMA_F16BF16_2x1SM_SS限制M为128或256，并生成cta_group::2；这些是该封装的约束，不是所有类型通用形状表。",
+          "pitfall": "认为cta_group::2自动把任意两个CTA拼成两倍算力，且无需处理peer生命周期。",
+          "check": {
+            "question": "双CTA模式结果错，为什么除了MMA参数还要查TMEM allocation与cluster？",
+            "answer": "因为输入/结果布局、配对驻留及协作分配共同构成合法操作条件。"
+          },
+          "state": "peer CTA对、cluster配置、双方TMEM/SMEM布局和存活状态。",
+          "transition": "双方资源准备完成后，按支持模式发起协作MMA并遵守双CTA管理协议。",
+          "prediction": "适合的tile可获益；小或不规则问题可能因更大tile与协作成本退化。",
+          "sourceIds": [
+            "H19-s2",
+            "H19-s4"
+          ]
+        },
+        {
+          "id": "H19.11",
+          "question": "Cluster Launch Control 抢走的是正在执行的block吗？",
+          "explain": [
+            "CC10.0的CLC允许运行中的CTA尝试取消一个尚未开始的CTA或cluster，并在成功后取得它的索引，由当前工作者执行这份工作。它改变了逻辑任务的归属，不是强行接管另一个正在运行block的寄存器和shared状态。",
+            "取消请求异步完成，必须等结果可用后解析成功标志和索引；失败可能表示没有可取消工作，也可能与调度条件相关。程序需正确退出或按协议处理，避免重复任务和无限自旋。其价值是兼顾工作窃取与kernel调度弹性。"
+          ],
+          "example": "某CTA提前做完自己的不规则tile，try_cancel成功获得待启动tile7，于是复用已有初始化状态计算tile7；若失败则结束该轮工作。",
+          "pitfall": "把CLC视为任意抢占正在运行CTA，或者不检查成功标志就使用返回索引。",
+          "check": {
+            "question": "为什么取消成功后必须把索引交给任务映射逻辑？",
+            "answer": "只有该索引标识被取消的工作；继续用原blockIdx会重复旧任务并遗漏被取消任务。"
+          },
+          "state": "当前工作者、尚未启动任务、取消结果和完成barrier。",
+          "transition": "异步请求→等待结果→成功则消费被取消索引，失败则走合法结束路径。",
+          "prediction": "任务耗时不均且初始化可复用时可能改善尾部；均匀小任务未必划算。",
+          "sourceIds": [
+            "H19-s5"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H20",
+      "kicker": "DEVICE & SYSTEM BOUNDARIES",
+      "question": "单个kernel已经优化，为什么应用仍然没有快起来？",
+      "summary": "把提交、整卡波次、并发、复制引擎和多GPU链路接起来，再用资源隔离与持续频率解释系统级表现。",
+      "scope": "CUDA公开执行与多GPU模型；具体并发与P2P能力需查询设备和系统。图中2个SM、每SM仅1个CTA、等时长CTA均为教学假设，不是某款GPU规格。",
+      "prerequisites": [
+        "H03 驻留",
+        "H11 缓存",
+        "H13 片内互连"
+      ],
+      "sources": [
+        {
+          "id": "H20-s1",
+          "title": "CUDA · Asynchronous Execution",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html",
+          "kind": "official",
+          "note": "§2.5 streams、events、并发kernel和数据传输；区分提交与设备执行；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H20-s2",
+          "title": "CUDA · Multiple GPU Systems",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/multi-gpu-systems.html",
+          "kind": "official",
+          "note": "§3.4；设备/context管理、P2P、跨设备stream/event与通信；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H20-s3",
+          "title": "NVIDIA MIG · Concepts",
+          "url": "https://docs.nvidia.com/datacenter/tesla/mig-user-guide/concepts.html",
+          "kind": "official",
+          "note": "GI与CI资源边界；CI共享父GI内存/引擎，配置依产品profile；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H20-s4",
+          "title": "NVIDIA MPS · Architecture",
+          "url": "https://docs.nvidia.com/deploy/mps/latest/architecture.html",
+          "kind": "official",
+          "note": "context、work queue与MPS并发；资源配置能力随版本变化；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H20-s5",
+          "title": "NCU · Profiling Guide",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "Launch Metrics的launch__waves_per_multiprocessor、profiling clocks与replay限制；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H20-s6",
+          "title": "NVIDIA System Management Interface",
+          "url": "https://docs.nvidia.com/deploy/nvidia-smi/index.html",
+          "kind": "official",
+          "note": "PCIe/NVLink拓扑与监控、Clocks Event Reasons、power/thermal限制；只读观测；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "launch__waves_per_multiprocessor",
+          "meaning": "每次launch的理论wave规模信息；不足一轮或存在部分wave时，提示整卡填充和尾部风险。",
+          "caveat": "它不是逐时刻的实际SM分配轨迹；CTA时长不均、并发工作和cluster调度会改变真实行为。",
+          "sourceId": "H20-s5"
+        },
+        {
+          "name": "LaunchStats / Occupancy（sections）",
+          "meaning": "将grid/block、可用SM与资源限制对应，检查kernel是否提供了足够的可驻留工作。",
+          "caveat": "NCU单kernel结果不能证明应用中copy与kernel重叠；并发分析应结合Nsight Systems时间线。",
+          "sourceId": "H20-s5"
+        },
+        {
+          "name": "nvidia-smi / NVML（辅助观测，非NCU指标）",
+          "meaning": "记录SM/内存时钟、功耗、温度及clock event reasons，区分kernel瓶颈与频率限制。",
+          "caveat": "采样频率与支持字段依设备/驱动；监控样本不是单kernel精确归因，也不要擅自修改功耗或时钟。",
+          "sourceId": "H20-s6"
+        }
+      ],
+      "walkthrough": {
+        "title": "5个CTA放到2个SM：尾部怎么出现？",
+        "assumption": "教学模型：2个SM，每SM一次只能驻留1个CTA；5个CTA等长且相互独立。每帧是一次完整CTA批次的事件边界，非真实时钟或调度顺序保证。",
+        "nodes": [
+          {
+            "id": "Q",
+            "label": "待执行CTA",
+            "kind": "data"
+          },
+          {
+            "id": "S0",
+            "label": "SM 0",
+            "kind": "compute"
+          },
+          {
+            "id": "S1",
+            "label": "SM 1",
+            "kind": "compute"
+          },
+          {
+            "id": "R",
+            "label": "已完成",
+            "kind": "state"
+          }
+        ],
+        "steps": [
+          {
+            "title": "提交5个CTA",
+            "explanation": "逻辑grid含B0至B4，但同时只能放下两个。",
+            "active": [
+              "Q"
+            ],
+            "values": {
+              "Q": "B0 B1 B2 B3 B4",
+              "S0": "空闲",
+              "S1": "空闲",
+              "R": "0 / 5"
+            },
+            "edges": []
+          },
+          {
+            "title": "第一批驻留",
+            "explanation": "两个SM各得到一个CTA；其余留待之后分配。",
+            "active": [
+              "S0",
+              "S1"
+            ],
+            "values": {
+              "Q": "B2 B3 B4",
+              "S0": "B0执行",
+              "S1": "B1执行",
+              "R": "0 / 5"
+            },
+            "edges": [
+              {
+                "from": "Q",
+                "to": "S0",
+                "label": "B0"
+              },
+              {
+                "from": "Q",
+                "to": "S1",
+                "label": "B1"
+              }
+            ]
+          },
+          {
+            "title": "完成后补位",
+            "explanation": "第一批结束并释放资源，B2/B3补入。",
+            "active": [
+              "S0",
+              "S1",
+              "R"
+            ],
+            "values": {
+              "Q": "B4",
+              "S0": "B2执行",
+              "S1": "B3执行",
+              "R": "2 / 5"
+            },
+            "edges": [
+              {
+                "from": "Q",
+                "to": "S0",
+                "label": "B2"
+              },
+              {
+                "from": "Q",
+                "to": "S1",
+                "label": "B3"
+              }
+            ]
+          },
+          {
+            "title": "部分wave尾部",
+            "explanation": "最后只剩B4；即使它内部occupancy很高，也无法填满另一SM。",
+            "active": [
+              "S0"
+            ],
+            "values": {
+              "Q": "空",
+              "S0": "B4执行",
+              "S1": "空闲",
+              "R": "4 / 5"
+            },
+            "edges": [
+              {
+                "from": "Q",
+                "to": "S0",
+                "label": "B4"
+              }
+            ]
+          },
+          {
+            "title": "整grid完成",
+            "explanation": "在此等长模型中，5个CTA占用3批时间；最后一批只有一半SM工作。",
+            "active": [
+              "R"
+            ],
+            "values": {
+              "Q": "空",
+              "S0": "空闲",
+              "S1": "空闲",
+              "R": "5 / 5"
+            },
+            "edges": [
+              {
+                "from": "S0",
+                "to": "R",
+                "label": "B4完成"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "从kernel时间走到应用时间（实验设计，未执行）",
+        "change": "固定总数据和计算：比较串行H2D→kernel→D2H与分块多stream流水；再改变grid大小观察尾部。",
+        "expect": "有足够分块、异步拷贝能力和独立资源时可重叠；过小块受提交开销影响，过大块可能缺乏pipeline深度。",
+        "measure": "用正确同步后的端到端墙钟计时和Nsight Systems时间线确认重叠；用NCU分析代表kernel，记录时钟、功耗及传输方向。",
+        "confounds": "pageable与pinned host memory、默认stream隐式同步、NUMA位置、设备间拓扑、其他任务、热稳态与profiling序列化。"
+      },
+      "atoms": [
+        {
+          "id": "H20.01",
+          "question": "CPU 的launch调用返回，为什么GPU还可能没开始执行？",
+          "explain": [
+            "通常的kernel launch先把工作提交到运行时/驱动管理的stream。API返回只表示主机侧提交已推进到相应阶段，不保证设备已经开始，更不保证已经完成；此前stream任务、依赖和设备调度都可能让工作等待。",
+            "所以主机API耗时、排队时间、设备kernel时间和端到端时间应分别测量。CUDA event可测设备时间段，但要放在正确stream并等待完成；Nsight Systems时间线用来关联CPU调用与GPU执行，避免把launch优化误认为kernel算术加速。"
+          ],
+          "example": "CPU连续提交100个短kernel后才同步：前面的API可能很快返回，但最终同步仍要等GPU处理剩余队列。",
+          "pitfall": "只用包围launch语句的CPU计时器测kernel运行时间，却没有完成同步。",
+          "check": {
+            "question": "API时间降到一半，GPU kernel时间不变，应用一定快一倍吗？",
+            "answer": "不一定。取决于提交是否在关键路径，以及能否与设备工作重叠。"
+          },
+          "state": "CPU提交、stream队列、依赖条件和GPU实际执行区间。",
+          "transition": "工作从已提交进入可调度，再开始设备执行，最后才产生完成事件。",
+          "prediction": "短kernel串联更可能暴露launch开销，长kernel更可能由设备工作主导。",
+          "sourceIds": [
+            "H20-s1",
+            "H20-s4"
+          ]
+        },
+        {
+          "id": "H20.02",
+          "question": "grid 的总block数如何影响整卡波次与尾部？",
+          "explain": [
+            "同时驻留的CTA数量由可用SM数及每SM资源上限决定；超过这个容量的grid分批推进。wave是有用的容量描述，不是CUDA保证所有CTA严格齐步开始和结束的硬件批次。真实调度会在资源释放后继续补入工作。",
+            "grid过小时，一些SM可能根本拿不到CTA；grid规模接近容量整数倍但有余数时，最后阶段也可能只剩少数SM忙碌。CTA耗时不均还会制造额外尾部，因此单个SM上的高occupancy不能证明整卡充分利用。"
+          ],
+          "example": "教学模型2个SM、每SM1个CTA、5个等长CTA需要3轮容量时间，最后一轮只执行1个CTA。",
+          "pitfall": "把launch__waves_per_multiprocessor当成精确记录每个SM实际执行顺序的时间线。",
+          "check": {
+            "question": "每个CTA很大且occupancy高，grid只有1个CTA，会怎样？",
+            "answer": "通常只能占用其被分配到的一个SM，其他SM无法分担这个CTA的普通执行。"
+          },
+          "state": "grid CTA数、每SM可驻留CTA数、可用SM和CTA耗时分布。",
+          "transition": "已驻留CTA结束释放资源，待执行CTA才能获得相应容量。",
+          "prediction": "更多可独立CTA通常改善整卡覆盖，但粒度过小又增加调度和外围开销。",
+          "sourceIds": [
+            "H20-s5",
+            "H20-s1"
+          ]
+        },
+        {
+          "id": "H20.03",
+          "question": "两个stream中的kernel为什么可能没有重叠，重叠了也可能更慢？",
+          "explain": [
+            "不同stream允许独立工作并发，但不承诺同时执行。kernel可能受到资源容量、设备能力、依赖或默认stream规则限制；单个kernel若占满shared、寄存器或可用CTA槽，另一个就未必有位置进入。",
+            "即使并发驻留，两者也会竞争SM计算路径、L2、HBM和功耗预算。并发能填补互补资源的空隙，也可能让两项工作的尾延迟都上升。应比较总完成时间与各自服务时间，不能仅凭时间线上存在重叠就认定收益。"
+          ],
+          "example": "一个低occupancy且计算少的kernel可能与另一个互补；两个同时饱和HBM的大流式kernel则通常争用同一带宽。",
+          "pitfall": "认为使用不同stream就等于绑定不同SM，拥有独立缓存和带宽。",
+          "check": {
+            "question": "两kernel各自单跑1ms，并发后各需1.8ms，总体是否一定更差？",
+            "answer": "总完成1.8ms仍可能优于串行2ms，但每项延迟都增加；取决于优化目标。"
+          },
+          "state": "各kernel资源需求、stream依赖、共享带宽与并发驻留空间。",
+          "transition": "依赖满足且有资源时允许并发，执行中继续竞争共享资源。",
+          "prediction": "互补负载可能改善吞吐；同瓶颈负载可能只增加排队和延迟。",
+          "sourceIds": [
+            "H20-s1",
+            "H20-s5"
+          ]
+        },
+        {
+          "id": "H20.04",
+          "question": "有copy engine，为什么拷贝不一定与计算重叠？",
+          "explain": [
+            "copy engine可独立推进适用的数据传输，但重叠还需要异步API、合适的host memory、独立stream/依赖和设备能力。把拷贝与消费同一数据的kernel放在同一个stream，顺序依赖仍然必须被遵守。",
+            "常见做法是分块双缓冲：计算第i块时传输第i+1块，回传更早的结果。host内存通常需要pinned以满足有效异步传输条件；拷贝和kernel仍可能争HBM、链路或内存控制资源。先确认时间线真实重叠，再算端到端收益。"
+          ],
+          "example": "B0已到GPU并计算，copy engine向B1传下一块；等B1拷贝event完成后，计算stream才消费B1。",
+          "pitfall": "把cudaMemcpyAsync中的Async理解为任意内存、任意方向都保证后台重叠。",
+          "check": {
+            "question": "单buffer反复拷贝并计算，为什么容易串行？",
+            "answer": "producer不能覆盖consumer仍在用的数据，缺少独立buffer和正确依赖便没有可重叠工作。"
+          },
+          "state": "copy engine、计算引擎、buffer所有权和stream events。",
+          "transition": "搬运与独立计算可并行，消费必须等对应buffer传输完成。",
+          "prediction": "具备流水深度时总时间可接近最慢阶段吞吐，但启动和排空成本仍存在。",
+          "sourceIds": [
+            "H20-s1",
+            "H20-s5"
+          ]
+        },
+        {
+          "id": "H20.05",
+          "question": "PCIe/NVLink的标称带宽怎样转化成小消息和大消息表现？",
+          "explain": [
+            "链路带宽描述大量数据持续传输时的能力，小消息却往往由提交、协议和往返延迟主导。用简化模型T≈固定开销+字节数/有效带宽，可以解释为什么同一链路上1KiB和1GiB的GB/s相差很大。",
+            "还需区分单向、双向合计、每link与整GPU聚合口径，核对实际拓扑和链路宽度。多个peer、CPU NUMA位置、PCIe交换层级或NVSwitch路由会改变可用路径；不能把产品宣传的聚合数直接分配给任意一对GPU。"
+          ],
+          "example": "某链路假设固定开销5µs、持续100GB/s，1KiB主要耗在固定部分；100MB则主要受传输时间影响。这是示例模型，不是实测规格。",
+          "pitfall": "把双向聚合带宽当成一次单向copy可达到的有效应用带宽。",
+          "check": {
+            "question": "为什么合并多个小传输常能提高GB/s？",
+            "answer": "它可以摊薄每次提交和协议固定开销，但也可能增加等待批次的延迟。"
+          },
+          "state": "消息字节数、固定开销、有效单向带宽和拓扑路径。",
+          "transition": "每次传输支付固定成本，再经共享链路搬运字节。",
+          "prediction": "消息增大时有效带宽往往上升趋于平台；小消息优化应重视次数与延迟。",
+          "sourceIds": [
+            "H20-s2",
+            "H20-s6"
+          ]
+        },
+        {
+          "id": "H20.06",
+          "question": "P2P load 看起来像读指针，为什么成本不像本地HBM？",
+          "explain": [
+            "启用且支持peer access后，GPU可访问另一GPU的内存，但地址透明不代表物理路径相同。远端load/store需要通过设备间互连和目标内存系统，受拓扑、链路、缓存行为以及远端负载影响。",
+            "P2P能力和远端原子支持都应按设备对查询，统一虚拟地址也不自动授予访问。大量细粒度依赖load可能受往返延迟限制；先批量搬到本地再复用，或增加独立并发访问，是不同的算法选择，需计入复制和存储成本。"
+          ],
+          "example": "从远端权重逐元素pointer-chase几乎没有并行度；将连续tile批量传入本地buffer后重复计算，可能更好地摊薄远端访问。",
+          "pitfall": "把能访问peer指针解释成两张GPU共享同一速度、同一一致性规则的显存。",
+          "check": {
+            "question": "cudaDeviceCanAccessPeer成功是否证明所有远端atomic类型都支持？",
+            "answer": "不能。访问能力与原子等具体操作能力需分别查询并遵循内存模型。"
+          },
+          "state": "访问GPU、目标GPU、peer映射、链路与在途请求。",
+          "transition": "地址被映射到远端路径，数据往返后才满足本地消费者依赖。",
+          "prediction": "低并发远端依赖链通常暴露延迟；可批量或复用的访问更可能利用带宽。",
+          "sourceIds": [
+            "H20-s2",
+            "H20-s6"
+          ]
+        },
+        {
+          "id": "H20.07",
+          "question": "MIG和MPS分别隔离或共享了哪些资源？",
+          "explain": [
+            "MIG按支持的profile划分GPU实例GI，分配SM、内存相关资源和引擎，提供规定的隔离边界；一个GI还可拆成多个CI，这些CI拥有各自计算资源，但共享父GI的内存和部分引擎。不能把GI与CI的隔离强度混为一谈。",
+            "MPS主要让多个进程的CUDA工作更有效地并发，并可提供版本相关的资源配置能力；它不应直接等同于MIG硬件分片。较新MPS的特性还需查对应版本。选择方案时先明确目标是利用率、容量分配、延迟可预测性还是故障边界。"
+          ],
+          "example": "两个CI位于同一GI内，即使SM分开，内存带宽仍可能互相影响；使用MPS的两个客户端也不能默认各自得到独立L2。",
+          "pitfall": "把MPS active-thread百分比当成固定独占的完整显存/缓存分区。",
+          "check": {
+            "question": "为什么只报告“使用了MIG”不足以解释性能？",
+            "answer": "还需说明GPU型号、GI/CI profile、资源份额与同GI内是否有其他工作。"
+          },
+          "state": "GI、CI、MPS客户端及各自资源/地址空间边界。",
+          "transition": "按配置分配或共享资源，调度并发工作时仍受对应共享边界约束。",
+          "prediction": "隔离更强可能改善可预测性，但减少单任务可用资源；吞吐需按份额比较。",
+          "sourceIds": [
+            "H20-s3",
+            "H20-s4"
+          ]
+        },
+        {
+          "id": "H20.08",
+          "question": "同一kernel同一指令，为什么连续运行后速度会变化？",
+          "explain": [
+            "实际SM和内存频率受功耗预算、温度、负载类型和设备策略影响。代码即使执行相同指令和字节量，每秒可用周期也可能变化；短时间boost结果不能直接代表持续运行吞吐。",
+            "评估应记录预热、运行时长、时钟、温度和功耗限制原因，并在相近热状态下比较。NCU可能使用时钟控制和replay，使profiling环境不同于生产；计数器解释与最终时延测量需分开，不要把频率差异归功于算法改进。"
+          ],
+          "example": "两个版本执行周期相近，但B测量时SM频率更低，墙钟时间可能更长；应先判断是否受power/thermal限制，而非马上增加warp。",
+          "pitfall": "只用铭牌boost频率计算实测利用率，忽略持续时钟与profiling设置。",
+          "check": {
+            "question": "每次冷启动都更快而长跑变慢，首先补采什么？",
+            "answer": "补采频率、功耗、温度及clock event reasons，检查热稳态和限频。"
+          },
+          "state": "周期工作量、实际时钟、功耗/温度和观测窗口。",
+          "transition": "设备策略调整频率，使相同周期工作映射到不同墙钟时间。",
+          "prediction": "纯算术占比高时频率下降更可能拉长时间；内存受限负载的影响可能不同。",
+          "sourceIds": [
+            "H20-s5",
+            "H20-s6"
+          ]
+        }
+      ]
+    }
+  ]
+}

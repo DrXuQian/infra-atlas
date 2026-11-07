@@ -161,42 +161,50 @@
             {
               "id": "H01.01",
               "title": "PTX 与最终 SASS 的关系",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.01"
             },
             {
               "id": "H01.02",
               "title": "用依赖链测指令延迟",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.02"
             },
             {
               "id": "H01.03",
               "title": "用独立指令流测吞吐",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.03"
             },
             {
               "id": "H01.04",
               "title": "编译器优化如何破坏微基准",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.04"
             },
             {
               "id": "H01.05",
               "title": "时钟、预热和缓存状态如何影响结果",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.05"
             },
             {
               "id": "H01.06",
               "title": "NCU 的 active / elapsed 归一口径",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.06"
             },
             {
               "id": "H01.07",
               "title": "采样、replay 与测量扰动",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.07"
             },
             {
               "id": "H01.08",
               "title": "模拟器结果如何与硬件校准",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H01.html#H01.08"
             }
           ],
           "links": [
@@ -212,42 +220,50 @@
             {
               "id": "H02.01",
               "title": "一个线程有哪些独立状态",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.01"
             },
             {
               "id": "H02.02",
               "title": "warp 指令与参与线程的关系",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.02"
             },
             {
               "id": "H02.03",
               "title": "active mask 如何改变执行",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.03"
             },
             {
               "id": "H02.04",
               "title": "逻辑 lane 与物理执行宽度",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.04"
             },
             {
               "id": "H02.05",
               "title": "CTA、warp、SM 的归属关系",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.05"
             },
             {
               "id": "H02.06",
               "title": "SM 子分区及资源共享边界",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.06"
             },
             {
               "id": "H02.07",
               "title": "block 到 SM 的分配",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.07"
             },
             {
               "id": "H02.08",
               "title": "TPC / GPC 在整卡层次中的位置",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H02.html#H02.08"
             }
           ],
           "links": [
@@ -263,42 +279,50 @@
             {
               "id": "H03.01",
               "title": "block 进入 SM 需要哪些资源",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.01"
             },
             {
               "id": "H03.02",
               "title": "寄存器容量如何限制驻留",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.02"
             },
             {
               "id": "H03.03",
               "title": "寄存器分配粒度造成的台阶",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.03"
             },
             {
               "id": "H03.04",
               "title": "shared memory 如何限制驻留",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.04"
             },
             {
               "id": "H03.05",
               "title": "thread / warp / block 数量上限",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.05"
             },
             {
               "id": "H03.06",
               "title": "不满一个 warp 的线程块",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.06"
             },
             {
               "id": "H03.07",
               "title": "theoretical 与 achieved occupancy",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.07"
             },
             {
               "id": "H03.08",
               "title": "block 生命周期与尾部效应",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H03.html#H03.08"
             }
           ],
           "links": [
@@ -314,52 +338,62 @@
             {
               "id": "H04.01",
               "title": "scheduler 管理哪些 warp",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.01"
             },
             {
               "id": "H04.02",
               "title": "resident 到 eligible 的条件",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.02"
             },
             {
               "id": "H04.03",
               "title": "eligible 到 selected 的选择",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.03"
             },
             {
               "id": "H04.04",
               "title": "issue 与完成的区别",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.04"
             },
             {
               "id": "H04.05",
               "title": "LRR 策略",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.05"
             },
             {
               "id": "H04.06",
               "title": "GTO 策略",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.06"
             },
             {
               "id": "H04.07",
               "title": "跨 warp 隐藏延迟",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.07"
             },
             {
               "id": "H04.08",
               "title": "warp 内 ILP",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.08"
             },
             {
               "id": "H04.09",
               "title": "多发射的资源约束",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.09"
             },
             {
               "id": "H04.10",
               "title": "not_selected 应如何解释",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H04.html#H04.10"
             }
           ],
           "links": [
@@ -375,42 +409,50 @@
             {
               "id": "H05.01",
               "title": "PC 如何决定下一条指令",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.01"
             },
             {
               "id": "H05.02",
               "title": "instruction cache miss",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.02"
             },
             {
               "id": "H05.03",
               "title": "指令缓冲不足",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.03"
             },
             {
               "id": "H05.04",
               "title": "分支发散与活动掩码",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.04"
             },
             {
               "id": "H05.05",
               "title": "分支汇合的机制与模型",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.05"
             },
             {
               "id": "H05.06",
               "title": "predication 与分支的取舍",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.06"
             },
             {
               "id": "H05.07",
               "title": "Independent Thread Scheduling",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.07"
             },
             {
               "id": "H05.08",
               "title": "循环展开导致的指令体积增长",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H05.html#H05.08"
             }
           ],
           "links": [
@@ -426,47 +468,56 @@
             {
               "id": "H06.01",
               "title": "RAW 依赖",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.01"
             },
             {
               "id": "H06.02",
               "title": "WAW 依赖",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.02"
             },
             {
               "id": "H06.03",
               "title": "WAR 风险与操作数读取时刻",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.03"
             },
             {
               "id": "H06.04",
               "title": "模拟器 scoreboard 的预留和释放",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.04"
             },
             {
               "id": "H06.05",
               "title": "固定延迟指令的 stall 控制",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.05"
             },
             {
               "id": "H06.06",
               "title": "可变延迟操作的依赖 barrier",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.06"
             },
             {
               "id": "H06.07",
               "title": "wait mask 如何等待生产者",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.07"
             },
             {
               "id": "H06.08",
               "title": "yield 控制信息",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.08"
             },
             {
               "id": "H06.09",
               "title": "wait、long_scoreboard、short_scoreboard 的区别",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H06.html#H06.09"
             }
           ],
           "links": [
@@ -482,42 +533,50 @@
             {
               "id": "H07.01",
               "title": "逻辑寄存器到物理 RF 的关系",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.01"
             },
             {
               "id": "H07.02",
               "title": "RF 的分区与 bank",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.02"
             },
             {
               "id": "H07.03",
               "title": "同 bank 操作数竞争",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.03"
             },
             {
               "id": "H07.04",
               "title": "读端口带宽限制",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.04"
             },
             {
               "id": "H07.05",
               "title": "operand collector 如何收集操作数",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.05"
             },
             {
               "id": "H07.06",
               "title": "多条指令之间的读取仲裁",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.06"
             },
             {
               "id": "H07.07",
               "title": "operand reuse 的作用",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.07"
             },
             {
               "id": "H07.08",
               "title": "写回端口与结果竞争",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H07.html#H07.08"
             }
           ],
           "links": [
@@ -533,47 +592,56 @@
             {
               "id": "H08.01",
               "title": "latency 与 initiation interval",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.01"
             },
             {
               "id": "H08.02",
               "title": "指令发射与执行入口接收",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.02"
             },
             {
               "id": "H08.03",
               "title": "FP32 / INT 指令的资源映射",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.03"
             },
             {
               "id": "H08.04",
               "title": "SFU 指令的吞吐限制",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.04"
             },
             {
               "id": "H08.05",
               "title": "多种指令如何竞争共享路径",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.05"
             },
             {
               "id": "H08.06",
               "title": "类型转换与数据解包的执行成本",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.06"
             },
             {
               "id": "H08.07",
               "title": "pipeline 饱和后增加 warp 的效果",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.07"
             },
             {
               "id": "H08.08",
               "title": "指令混合如何改变瓶颈",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.08"
             },
             {
               "id": "H08.09",
               "title": "Core / CUDA Core 的计数口径与执行资源",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H08.html#H08.09"
             }
           ],
           "links": [
@@ -589,42 +657,50 @@
             {
               "id": "H09.01",
               "title": "从线程地址生成访存请求",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.01"
             },
             {
               "id": "H09.02",
               "title": "对齐访问需要多少 sector",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.02"
             },
             {
               "id": "H09.03",
               "title": "跨边界访问增加多少流量",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.03"
             },
             {
               "id": "H09.04",
               "title": "stride 对请求数量的影响",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.04"
             },
             {
               "id": "H09.05",
               "title": "gather 的地址分布",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.05"
             },
             {
               "id": "H09.06",
               "title": "向量化 load 改变了什么",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.06"
             },
             {
               "id": "H09.07",
               "title": "部分 lane 参与时的请求效率",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.07"
             },
             {
               "id": "H09.08",
               "title": "useful bytes 与实际传输字节",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H09.html#H09.08"
             }
           ],
           "links": [
@@ -641,42 +717,50 @@
             {
               "id": "H10.01",
               "title": "地址到 bank 的映射",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.01"
             },
             {
               "id": "H10.02",
               "title": "bank conflict 如何产生",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.02"
             },
             {
               "id": "H10.03",
               "title": "同地址读取与广播",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.03"
             },
             {
               "id": "H10.04",
               "title": "宽访问如何拆成多个处理波次",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.04"
             },
             {
               "id": "H10.05",
               "title": "transpose 为什么容易冲突",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.05"
             },
             {
               "id": "H10.06",
               "title": "padding 如何改变映射",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.06"
             },
             {
               "id": "H10.07",
               "title": "swizzle 如何重排访问",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.07"
             },
             {
               "id": "H10.08",
               "title": "ldmatrix 的线程地址与数据布局",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H10.html#H10.08"
             }
           ],
           "links": [
@@ -692,52 +776,62 @@
             {
               "id": "H11.01",
               "title": "cache line 与 sector",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.01"
             },
             {
               "id": "H11.02",
               "title": "tag 查找与数据访问",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.02"
             },
             {
               "id": "H11.03",
               "title": "set / way 与冲突失效",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.03"
             },
             {
               "id": "H11.04",
               "title": "容量失效与工作集",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.04"
             },
             {
               "id": "H11.05",
               "title": "L1 与 shared memory carveout",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.05"
             },
             {
               "id": "H11.06",
               "title": "L1、L2 命中分别省掉哪段路径",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.06"
             },
             {
               "id": "H11.07",
               "title": "cache operator 的作用边界",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.07"
             },
             {
               "id": "H11.08",
               "title": "L2 persistence 与驱逐优先级",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.08"
             },
             {
               "id": "H11.09",
               "title": "constant cache 的广播与地址分散",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.09"
             },
             {
               "id": "H11.10",
               "title": "命中率高但性能仍差的原因",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H11.html#H11.10"
             }
           ],
           "links": [
@@ -754,42 +848,50 @@
             {
               "id": "H12.01",
               "title": "load 发射与数据返回",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.01"
             },
             {
               "id": "H12.02",
               "title": "未完成 miss 的跟踪项与 MSHR 模型",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.02"
             },
             {
               "id": "H12.03",
               "title": "多个请求如何合并等待",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.03"
             },
             {
               "id": "H12.04",
               "title": "miss 跟踪资源耗尽",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.04"
             },
             {
               "id": "H12.05",
               "title": "LSU 队列满如何阻止后续发射",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.05"
             },
             {
               "id": "H12.06",
               "title": "一个 warp 如何提供多条独立访存",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.06"
             },
             {
               "id": "H12.07",
               "title": "需要多少在途字节才能填满带宽",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.07"
             },
             {
               "id": "H12.08",
               "title": "store 排空与 kernel 尾部",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H12.html#H12.08"
             }
           ],
           "links": [
@@ -806,47 +908,56 @@
             {
               "id": "H13.01",
               "title": "地址如何分布到内存分区",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.01"
             },
             {
               "id": "H13.02",
               "title": "partition camping",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.02"
             },
             {
               "id": "H13.03",
               "title": "SM 到 L2 的互连竞争",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.03"
             },
             {
               "id": "H13.04",
               "title": "下游阻塞如何向上游传播",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.04"
             },
             {
               "id": "H13.05",
               "title": "channel / pseudo-channel / bank 的并行性",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.05"
             },
             {
               "id": "H13.06",
               "title": "row hit 与 row conflict",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.06"
             },
             {
               "id": "H13.07",
               "title": "ACT、READ/WRITE、PRE 的时序",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.07"
             },
             {
               "id": "H13.08",
               "title": "读写切换与 refresh",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.08"
             },
             {
               "id": "H13.09",
               "title": "内存控制器调度策略",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H13.html#H13.09"
             }
           ],
           "links": [
@@ -862,37 +973,44 @@
             {
               "id": "H14.01",
               "title": "虚拟地址到物理地址的路径",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H14.html#H14.01"
             },
             {
               "id": "H14.02",
               "title": "TLB 命中与失效",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H14.html#H14.02"
             },
             {
               "id": "H14.03",
               "title": "TLB reach 与工作集",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H14.html#H14.03"
             },
             {
               "id": "H14.04",
               "title": "跨页访问的影响",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H14.html#H14.04"
             },
             {
               "id": "H14.05",
               "title": "页大小与翻译压力",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H14.html#H14.05"
             },
             {
               "id": "H14.06",
               "title": "page fault 与数据迁移",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H14.html#H14.06"
             },
             {
               "id": "H14.07",
               "title": "Unified Memory 中数据位置的影响",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H14.html#H14.07"
             }
           ],
           "links": [
@@ -908,42 +1026,50 @@
             {
               "id": "H15.01",
               "title": "warp 内同步及参与掩码",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.01"
             },
             {
               "id": "H15.02",
               "title": "CTA barrier 的到达与等待",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.02"
             },
             {
               "id": "H15.03",
               "title": "到达时间不均造成的等待",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.03"
             },
             {
               "id": "H15.04",
               "title": "原子性、可见性、顺序性的区别",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.04"
             },
             {
               "id": "H15.05",
               "title": "block / device / system scope",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.05"
             },
             {
               "id": "H15.06",
               "title": "release / acquire 的发布—消费关系",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.06"
             },
             {
               "id": "H15.07",
               "title": "fence 与执行同步的职责",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.07"
             },
             {
               "id": "H15.08",
               "title": "跨 block 自旋同步的进展与死锁问题",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H15.html#H15.08"
             }
           ],
           "links": [
@@ -959,37 +1085,44 @@
             {
               "id": "H16.01",
               "title": "atomic read-modify-write 的逻辑过程",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H16.html#H16.01"
             },
             {
               "id": "H16.02",
               "title": "多线程竞争同一地址",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H16.html#H16.02"
             },
             {
               "id": "H16.03",
               "title": "地址分布如何影响竞争",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H16.html#H16.03"
             },
             {
               "id": "H16.04",
               "title": "shared 与 global atomic 的执行路径",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H16.html#H16.04"
             },
             {
               "id": "H16.05",
               "title": "返回旧值与不需要返回值的区别",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H16.html#H16.05"
             },
             {
               "id": "H16.06",
               "title": "CAS 重试",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H16.html#H16.06"
             },
             {
               "id": "H16.07",
               "title": "warp 聚合如何减少原子请求",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H16.html#H16.07"
             }
           ],
           "links": [
@@ -1005,42 +1138,50 @@
             {
               "id": "H17.01",
               "title": "一条 MMA 的逻辑计算",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.01"
             },
             {
               "id": "H17.02",
               "title": "collective 指令的参与线程",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.02"
             },
             {
               "id": "H17.03",
               "title": "matrix fragment 在线程间的分布",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.03"
             },
             {
               "id": "H17.04",
               "title": "操作数搬运与布局要求",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.04"
             },
             {
               "id": "H17.05",
               "title": "accumulator 依赖链",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.05"
             },
             {
               "id": "H17.06",
               "title": "指令形状与有效计算利用率",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.06"
             },
             {
               "id": "H17.07",
               "title": "数据类型与累加精度",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.07"
             },
             {
               "id": "H17.08",
               "title": "结构化稀疏及元数据",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H17.html#H17.08"
             }
           ],
           "links": [
@@ -1057,42 +1198,50 @@
             {
               "id": "H18.01",
               "title": "普通 load/store 与 cp.async 的数据路径",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.01"
             },
             {
               "id": "H18.02",
               "title": "async copy 的发起与完成",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.02"
             },
             {
               "id": "H18.03",
               "title": "commit group",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.03"
             },
             {
               "id": "H18.04",
               "title": "wait group",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.04"
             },
             {
               "id": "H18.05",
               "title": "双缓冲的所有权切换",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.05"
             },
             {
               "id": "H18.06",
               "title": "多 stage 的延迟隐藏与资源代价",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.06"
             },
             {
               "id": "H18.07",
               "title": "mbarrier 的 arrival、phase 与完成条件",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.07"
             },
             {
               "id": "H18.08",
               "title": "不同访问 proxy 之间的顺序",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H18.html#H18.08"
             }
           ],
           "links": [
@@ -1108,57 +1257,68 @@
             {
               "id": "H19.01",
               "title": "TMA tensor map 与地址生成",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.01"
             },
             {
               "id": "H19.02",
               "title": "TMA 完成与消费者等待",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.02"
             },
             {
               "id": "H19.03",
               "title": "TMA multicast",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.03"
             },
             {
               "id": "H19.04",
               "title": "WGMMA 的发起、提交和等待",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.04"
             },
             {
               "id": "H19.05",
               "title": "warp specialization",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.05"
             },
             {
               "id": "H19.06",
               "title": "setmaxnreg 的寄存器资源调整",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.06"
             },
             {
               "id": "H19.07",
               "title": "cluster 驻留与 DSM",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.07"
             },
             {
               "id": "H19.08",
               "title": "SM100 Tensor Memory",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.08"
             },
             {
               "id": "H19.09",
               "title": "tcgen05.mma",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.09"
             },
             {
               "id": "H19.10",
               "title": "支持的双 CTA 协作模式",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.10"
             },
             {
               "id": "H19.11",
               "title": "Cluster Launch Control",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H19.html#H19.11"
             }
           ],
           "links": [
@@ -1174,42 +1334,50 @@
             {
               "id": "H20.01",
               "title": "kernel 提交与设备端开始执行",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.01"
             },
             {
               "id": "H20.02",
               "title": "grid 波次与 SM 分配",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.02"
             },
             {
               "id": "H20.03",
               "title": "并发 kernel 的资源竞争",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.03"
             },
             {
               "id": "H20.04",
               "title": "copy engine 与计算重叠",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.04"
             },
             {
               "id": "H20.05",
               "title": "PCIe / NVLink 的延迟与带宽",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.05"
             },
             {
               "id": "H20.06",
               "title": "P2P 远端访问路径",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.06"
             },
             {
               "id": "H20.07",
               "title": "MIG / MPS 的资源边界",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.07"
             },
             {
               "id": "H20.08",
               "title": "功耗、频率与持续性能",
-              "status": "planned"
+              "status": "published",
+              "url": "hardware/H20.html#H20.08"
             }
           ],
           "links": [

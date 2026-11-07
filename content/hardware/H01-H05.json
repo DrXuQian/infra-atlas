@@ -1,0 +1,2002 @@
+{
+  "modules": [
+    {
+      "id": "H01",
+      "kicker": "MEASURE BEFORE EXPLAIN",
+      "question": "你测到的是指令、工作负载，还是测量工具？",
+      "summary": "建立从源码到 SASS、从微基准到计数器、从模型到真机的证据链。先定义测量对象，才讨论硬件机制。",
+      "scope": "通用方法；论文示例限定 V100/Volta。下面的数值与帧是教学模型，不是真机测试结果。",
+      "prerequisites": [
+        "CUDA kernel、线程和循环的基本概念",
+        "能区分程序语义与机器指令"
+      ],
+      "sources": [
+        {
+          "id": "H01-s1",
+          "title": "CUDA Binary Utilities · cubin 与反汇编",
+          "url": "https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html",
+          "kind": "official",
+          "note": "CUDA 13.5，§1–3：cuobjdump、nvdisasm 及控制流分析；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H01-s2",
+          "title": "PTX ISA · 虚拟指令集",
+          "url": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#introduction",
+          "kind": "official",
+          "note": "PTX ISA 9.5，Introduction；PTX 语义不等于最终机器码时序；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H01-s3",
+          "title": "Nsight Compute Profiling Guide · Metrics Structure / Reproducibility",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "§2.3 Metrics Guide、§2.6 Reproducibility：归一化、时钟和缓存控制；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H01-s4",
+          "title": "Jia et al. · Dissecting the NVIDIA Volta GPU Architecture",
+          "url": "https://arxiv.org/pdf/1804.06826",
+          "kind": "paper",
+          "note": "2018，§2.2、§3.5、§4.1：V100 的调度、指令缓存及延迟微基准；结论仅限其设备和方法；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H01-s5",
+          "title": "Accel-Sim · GPGPU-Sim 4.x performance model",
+          "url": "https://github.com/accel-sim/accel-sim-framework/blob/048d74b9e8a3fcf97f357f1bf588fdb3660ab13e/gpu-simulator/gpgpu-sim4.md",
+          "kind": "simulator",
+          "note": "已读文件并固定最后修改commit 048d74b（2025-02-13）；sub-core、可配置执行单元、缓存及互连模型；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H01-s6",
+          "title": "Nsight Compute CLI · metric / section discovery",
+          "url": "https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html",
+          "kind": "official",
+          "note": "命令行参考：--query-metrics、--list-sections、replay 与 cache-control；具体设备支持需本机查询；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "InstructionStats / SourceCounters",
+          "meaning": "检查动态指令种类、SASS 与源码关联，再判断测量链是否真实存在。",
+          "caveat": "section 可用性先用 ncu --list-sections 查询；源码映射依赖编译调试行信息。",
+          "sourceId": "H01-s3"
+        },
+        {
+          "name": ".avg.per_cycle_active 与 .avg.per_cycle_elapsed",
+          "meaning": "分别理解活动周期与经过周期上的平均速率；结合实例分布判断空闲或不均衡。",
+          "caveat": "这是指标后缀口径，不是可单独执行的 metric 名；完整名称用 ncu --query-metrics 核对。",
+          "sourceId": "H01-s3"
+        },
+        {
+          "name": "launch__registers_per_thread",
+          "meaning": "检查微基准改变 ILP 后寄存器占用是否也发生变化。",
+          "caveat": "LaunchStats 元数据，不表示动态 RF 读取带宽。",
+          "sourceId": "H01-s3"
+        }
+      ],
+      "walkthrough": {
+        "title": "同样四条操作：依赖链与独立工作",
+        "assumption": "抽象单入口流水线，latency=3、每周期接收1条；固定一个 scheduler。这里仅推进依赖链，时刻 c 发射的结果在 c+3 开头可用。先完成旧操作，再判定就绪并发射。",
+        "nodes": [
+          {
+            "id": "w",
+            "label": "指令链",
+            "kind": "state"
+          },
+          {
+            "id": "p",
+            "label": "执行管线",
+            "kind": "compute"
+          },
+          {
+            "id": "r",
+            "label": "结果 R",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "周期0：发射 A",
+            "explanation": "A 读取初值；B 依赖 A 的结果，因此不能在下一周期直接消费。",
+            "active": [
+              "w",
+              "p"
+            ],
+            "values": {
+              "w": "A 已发射；B 等待",
+              "p": "A → 到期3",
+              "r": "初值"
+            },
+            "edges": [
+              {
+                "to": "p",
+                "label": "A",
+                "from": "w"
+              }
+            ]
+          },
+          {
+            "title": "周期1：入口空闲",
+            "explanation": "A 尚未完成，B 不就绪。管线仍有在途操作，但这个依赖链没有新指令可发射。",
+            "active": [
+              "p"
+            ],
+            "values": {
+              "w": "B：RAW 等待",
+              "p": "A 在途",
+              "r": "尚未更新"
+            },
+            "edges": []
+          },
+          {
+            "title": "周期2：继续等待",
+            "explanation": "A 将在下一个周期开始时完成。入口空闲不等于整条管线没有任何工作。",
+            "active": [
+              "p"
+            ],
+            "values": {
+              "w": "B：RAW 等待",
+              "p": "A 在途",
+              "r": "尚未更新"
+            },
+            "edges": []
+          },
+          {
+            "title": "周期3：完成 A，发射 B",
+            "explanation": "先更新结果，再解除 B 的依赖；B 可以在本周期发射，并于周期6开头完成。",
+            "active": [
+              "r",
+              "w",
+              "p"
+            ],
+            "values": {
+              "w": "B 已发射",
+              "p": "B → 到期6",
+              "r": "A 的结果"
+            },
+            "edges": [
+              {
+                "to": "r",
+                "label": "A 完成",
+                "from": "p"
+              },
+              {
+                "to": "w",
+                "label": "依赖满足",
+                "from": "r"
+              },
+              {
+                "to": "p",
+                "label": "B",
+                "from": "w"
+              }
+            ]
+          },
+          {
+            "title": "对照：若有独立链",
+            "explanation": "若程序顺序是 A0、A1、A2、B0，且 Ai 相互独立，可在周期0、1、2发射 Ai，并于周期3发射依赖 A0 的 B0。",
+            "active": [
+              "w",
+              "p"
+            ],
+            "values": {
+              "w": "A0 / A1 / A2 / B0",
+              "p": "入口可连续接收",
+              "r": "不同目标寄存器"
+            },
+            "edges": [
+              {
+                "to": "p",
+                "label": "每周期1条",
+                "from": "w"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：依赖链斜率与独立链扫描（未执行）",
+        "change": "先固定一个依赖链并改变 N；再固定总操作数，改变独立累加器数量。",
+        "expect": "依赖链时间随 N 近似线性；独立链增加后吞吐先提升，再受发射或管线容量限制。",
+        "measure": "保留输出并验值；反汇编 SASS，记录资源用量、普通运行耗时和必要 NCU section。",
+        "confounds": "编译器化简、循环开销、register spill、频率、warmup、replay 和缓存状态。"
+      },
+      "atoms": [
+        {
+          "id": "H01.01",
+          "question": "源码里的一次乘加，为什么不能直接数成一条硬件指令？",
+          "explain": [
+            "CUDA 源码、PTX 和 SASS 是三层不同的表示。PTX 描述虚拟线程和指令语义；ptxas 或驱动 JIT 再为目标 SM 选择机器指令、分配寄存器并安排控制信息。一次 PTX 操作可能消失、融合或展开，因此 PTX 行数不能直接代替动态发射次数。",
+            "分析延迟时先固定目标架构与工具链，保存实际运行的 cubin，并用 cuobjdump 或 nvdisasm 检查 SASS。还要区分静态代码里的指令条数与循环实际执行次数。若程序含多个架构的 fatbin，必须确认设备选择了哪个镜像。"
+          ],
+          "example": "同一段 x=a*b+c，在不同浮点语义或编译选项下可能得到融合乘加或分离乘法、加法；应比较最终 SASS 和数值结果。",
+          "pitfall": "看见 PTX 的 mad 或 fma，就宣称所有 GPU 都只发射一条同名机器指令。",
+          "check": {
+            "question": "两次实验 PTX 相同、SASS 不同，还能只归因于硬件吗？",
+            "answer": "不能。目标架构、编译器调度、寄存器分配都可能改变测量对象。"
+          },
+          "state": "固定源代码、目标 SM、编译选项和运行镜像。",
+          "transition": "PTX 经目标相关编译变为 SASS，SASS 经真实控制流产生动态指令流。",
+          "prediction": "若改变编译选项，先预测 SASS 是否改变，再解释性能差异。",
+          "sourceIds": [
+            "H01-s1",
+            "H01-s2"
+          ]
+        },
+        {
+          "id": "H01.02",
+          "question": "怎样让测到的时间主要暴露结果依赖延迟？",
+          "explain": [
+            "构造串行 RAW 依赖链：后一条指令必须消费前一条的输出，避免它们重叠执行。用多种链长 N 测周期，考察 T(N) 的斜率，比把单条指令夹在两次计时读取之间更能压低计时开销的比例。",
+            "这个斜率接近该指令序列的依赖受限成本，并非无条件等于某个内部流水级数。循环控制、时钟读取、编译器重排及其他 warp 的发射竞争仍会进入结果。需要保留最终输出、检查 SASS，固定数据类型和依赖操作数。"
+          ],
+          "example": "教学数据若 T(100)=430、T(200)=830 周期，则增量斜率为 4 周期/操作；常数 30 周期不应重复算进每一条。",
+          "pitfall": "把吞吐倒数、kernel 总时间除以线程数，或有并发干扰的时钟差当作纯指令延迟。",
+          "check": {
+            "question": "为什么至少测多个 N，而不是只测一次？",
+            "answer": "可以分离固定开销，识别非线性区间，并检查循环或缓存效应是否改变。"
+          },
+          "state": "一条结果链、链长 N、输入、终值和计时边界。",
+          "transition": "仅当前生产者结果可用，下一条消费者才允许推进。",
+          "prediction": "若依赖链是唯一瓶颈，增加 N 后时间应近似线性增加。",
+          "sourceIds": [
+            "H01-s1",
+            "H01-s4"
+          ]
+        },
+        {
+          "id": "H01.03",
+          "question": "独立指令为什么能比一条依赖链更快完成同样工作？",
+          "explain": [
+            "多个独立累加器把结果依赖分散开：在 a0 等待时，可以发射 a1、a2 的指令。流水线允许新操作进入的间隔称为 initiation interval，它与一个结果变得可消费的 latency 不同；吞吐实验需要足够多独立工作让入口持续忙碌。",
+            "增加独立链数后，单位时间完成的操作数通常先升后趋于平台。平台可能由发射、操作数读取或执行管线限制造成，不一定就是某种 ALU 数量。必须按 warp 指令、线程指令或 FLOP 统一计数，并把每次 FMA 的两个浮点运算明确写出。"
+          ],
+          "example": "教学流水线 latency=4、每周期接收1条。单依赖链只能约每4周期发射；四条交错的独立链可在稳态每周期发射。",
+          "pitfall": "把一条指令需要4周期，理解成整个执行管线4周期只能处理一条。",
+          "check": {
+            "question": "增加到八条独立链后吞吐不再涨，说明什么？",
+            "answer": "已有足够并行性，某个容量或速率瓶颈成为上限；还需计数器和对照定位。"
+          },
+          "state": "独立链数 K、每链依赖、入口接收间隔和有效工作量。",
+          "transition": "按程序顺序轮流推进不同累加器，不越过阻塞的队首指令。",
+          "prediction": "K 增加到足以覆盖延迟后，继续增加 K 不应突破同一管线吞吐上限。",
+          "sourceIds": [
+            "H01-s1",
+            "H01-s4",
+            "H01-s5"
+          ]
+        },
+        {
+          "id": "H01.04",
+          "question": "微基准里写出的计算，为什么可能根本没有执行？",
+          "explain": [
+            "编译器按可观察行为保持语义，而不是按研究者的意图保留每行操作。无外部用途的结果可被删除，常数输入可能被折叠，循环可能被化简，独立操作可能被重排。源代码看起来很长，并不保证产生相同长度的依赖链。",
+            "应让输入来自运行时，把最终结果写回并核对正确性，记录编译选项、寄存器数和反汇编。必要时用受控内联 PTX 表达特定依赖，但 volatile 或内联 PTX 也不自动冻结全部后端优化；必须查看实际 SASS 的操作数关系与计时位置。"
+          ],
+          "example": "计算循环的结果若从未写回，整个循环可能被移除。加上输出后仍需检查：编译器是否把重复加常数替换成另一种等价计算。",
+          "pitfall": "使用 volatile 就认为测量已经免疫所有编译优化。",
+          "check": {
+            "question": "计时变快一百倍时，应先检查哪个对象？",
+            "answer": "先看 SASS 与输出正确性，确认工作仍存在，再调查硬件优化。"
+          },
+          "state": "输入来源、终值可见性、SASS 指令序列、寄存器活跃区间。",
+          "transition": "只有对可观察结果有贡献的操作才被编译器要求保留。",
+          "prediction": "删除输出用途可能显著缩短生成代码和测量时间。",
+          "sourceIds": [
+            "H01-s1",
+            "H01-s2",
+            "H01-s4"
+          ]
+        },
+        {
+          "id": "H01.05",
+          "question": "同一个 kernel 重复跑，为什么第一遍和后面不一样？",
+          "explain": [
+            "首次执行可能包含模块加载、JIT、页映射和冷缓存；随后 GPU 频率、温度、功耗状态与数据缓存又会变化。纳秒时间和设备周期不是可随意互换的量，尤其频率在运行间变化时。预热必须明确是在预热代码、设备状态还是特定数据。",
+            "把冷启动、稳定热运行和应用真实上下文分别测量。记录时钟控制、缓存控制与输入工作集；NCU 为可复现性采用的时钟和缓存策略可能与不带 profiler 的程序不同。若问题是相邻 kernel 的缓存复用，应保留应用上下文，而不能只测被冲洗过的孤立 kernel。"
+          ],
+          "example": "研究权重 L2 复用时，先执行生产热缓存的访问，再测消费者；若 profiler 在消费者前清缓存，这个实验已经换了问题。",
+          "pitfall": "只报告最快一次，或把 NCU 的默认缓存状态当成应用长期运行状态。",
+          "check": {
+            "question": "热缓存实验用什么作为对照？",
+            "answer": "同一输入和代码下的显式冷状态，并保持其余时钟、工作集和测量边界一致。"
+          },
+          "state": "代码加载状态、频率、温度、工作集和缓存预置。",
+          "transition": "预热改变初始条件；测量只在声明的初始状态之后开始。",
+          "prediction": "工作集能驻留缓存时，冷与热运行可能出现明显差异。",
+          "sourceIds": [
+            "H01-s3",
+            "H01-s6"
+          ]
+        },
+        {
+          "id": "H01.06",
+          "question": "为什么两个看似相同的利用率百分比不能直接比较？",
+          "explain": [
+            "NCU 指标名包含硬件作用域、聚合方式和归一化口径。.avg 通常聚合多个同类单元实例；per_cycle_active 以单元活动周期为分母，per_cycle_elapsed 则包含测量窗口中的空闲周期。两者回答的是忙时效率和整个窗口的平均效率。",
+            "因此 active 口径很高，仍可能只有少数 SM 或很短一段时间在工作。分析前先看指标详情和支持的实例分布，再把发射率、驻留 warp、pipeline 活动与整卡耗时分开。不要把一个平均值解释成每个 scheduler 都处于相同状态。"
+          ],
+          "example": "简化例：某单元100个窗口周期里只活跃25周期，活跃时每周期执行1次；active 速率为1，elapsed 速率为0.25。",
+          "pitfall": "把 pct_of_peak_sustained_active 当成整张卡在整个 kernel 时间内的有效 FLOPS 百分比。",
+          "check": {
+            "question": "某指标 avg=50%，能证明所有 SM 都50%吗？",
+            "answer": "不能。可能来自单元间不均衡，也可能来自时间上的空闲；需看实例或时间分布。"
+          },
+          "state": "计数值、单元实例、活动周期和总经过周期。",
+          "transition": "先按指定实例聚合，再按该指标定义的周期与峰值归一化。",
+          "prediction": "同一计数值在包含更多空闲周期的窗口中，elapsed 速率会下降。",
+          "sourceIds": [
+            "H01-s3",
+            "H01-s6"
+          ]
+        },
+        {
+          "id": "H01.07",
+          "question": "性能分析工具为什么会改变正在分析的程序？",
+          "explain": [
+            "硬件计数器不能总在一次运行里收集全部指标，NCU 可能重放 kernel 或应用，也可能保存恢复设备内存。PC 采样只是以一定间隔观察 warp 状态；它不是完整逐周期日志，某个 stall 的样本比例也不是整个 GPU 损失时间的直接分解。",
+            "应先以普通运行测端到端时间，再用最少必要指标验证假设。对依赖并发、缓存预置或主机交互的代码选择合适 replay 模式；比较两次结果时保持采集方法相同。短 kernel 样本少时，应报告波动或扩大代表性工作窗口，不能凭单个样本下结论。"
+          ],
+          "example": "两个并发 kernel 在应用中重叠，孤立重放一个 kernel 时竞争消失。所得计数器适合解释局部行为，却不能直接还原应用吞吐。",
+          "pitfall": "将全部 stall 样本加和后，当作可逐项相加的端到端时间损失。",
+          "check": {
+            "question": "采样显示某行等待很多，应该查生产者还是只改这行？",
+            "answer": "两者都要看；等待通常出现在消费者，根因可能是更早的生产者访问。"
+          },
+          "state": "replay 模式、采样间隔、采集 passes、被观察的执行上下文。",
+          "transition": "每次重放按工具策略恢复状态；采样只记录被抽中的观察时刻。",
+          "prediction": "增加指标可能增加 passes 和工具开销，但不代表原 kernel 变慢。",
+          "sourceIds": [
+            "H01-s3",
+            "H01-s6"
+          ]
+        },
+        {
+          "id": "H01.08",
+          "question": "模拟器和真机时间接近，就能认定内部机制完全一致吗？",
+          "explain": [
+            "模拟器把已知机制与可调参数组合成一个可执行模型。总时间相近可能由不同误差抵消：管线过快与访存过慢恰好相抵。校准因此应拆成指令、缓存、吞吐、并发和整程序多个层次，用未参与调参的工作负载检验泛化。",
+            "记录 simulator commit、配置、trace 生成方式、真实设备和驱动工具链。先比较有明确预期的微基准，再比较指令量、cache miss、带宽与调度等待等可观察量。代码中的队列大小、仲裁策略和子分区组织是模型定义，不能仅因匹配一个 benchmark 就称为芯片实物。"
+          ],
+          "example": "若模型和真机都用1毫秒完成某 GEMM，但模型 DRAM 流量多一倍、计算吞吐也高一倍，时间吻合仍暴露出错误的瓶颈解释。",
+          "pitfall": "把 Accel-Sim 的默认 GTO 策略写成 NVIDIA 硬件的官方调度策略。",
+          "check": {
+            "question": "校准后换一个工作集大小就严重偏差，优先怀疑什么？",
+            "answer": "先怀疑缓存、并发或工作集转折点的建模与配置，而非继续只拟合总时间。"
+          },
+          "state": "模型版本、配置、trace、真机测试集和独立验证集。",
+          "transition": "单变量微基准约束参数，再以独立工作负载检查预测。",
+          "prediction": "正确的机制模型应能解释趋势和转折点，而不只是一个总耗时数值。",
+          "sourceIds": [
+            "H01-s4",
+            "H01-s5"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H02",
+      "kicker": "FROM THREAD TO DEVICE",
+      "question": "线程的逻辑身份，怎样映射到有限的物理执行资源？",
+      "summary": "把线程、warp、CTA、scheduler、SM、TPC 与 GPC 分开，理解参与集合、驻留归属和资源共享边界。",
+      "scope": "CUDA线程语义为官方契约；scheduler静态分区例子采用Volta。图中只有2个SM，展示层次与分配，不是芯片版图。",
+      "prerequisites": [
+        "H01：计数单位与证据类型"
+      ],
+      "sources": [
+        {
+          "id": "H02-s1",
+          "title": "CUDA Programming Guide · SIMT Execution Model",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#simt-execution-model",
+          "kind": "official",
+          "note": "2026-10-31 更新，§3.2.2.1：warp、per-thread 状态及 Independent Thread Scheduling；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H02-s2",
+          "title": "CUDA Programming Guide · Thread Hierarchy / Kernel Launch and Occupancy",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-cuda-kernels.html#kernel-launch-and-occupancy",
+          "kind": "official",
+          "note": "2026-10-31 更新，§2.3.2、§2.3.7：block/warp 形成及 block 分配契约；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H02-s3",
+          "title": "Volta Tuning Guide · Instruction Scheduling",
+          "url": "https://docs.nvidia.com/cuda/volta-tuning-guide/index.html#instruction-scheduling",
+          "kind": "official",
+          "note": "CUDA 13.5，§1.4.1.1：GV100 四个 scheduler 及静态 warp 归属；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H02-s4",
+          "title": "Nsight Compute · Hardware Model / Units",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "§2.3：SM/SMSP 模型，§2.3.4：GPC、TPC 与指标作用域术语；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H02-s5",
+          "title": "GPGPU-Sim · shader_core_ctx 调度器分配",
+          "url": "https://github.com/accel-sim/gpgpu-sim_distribution/blob/4195dd4f229cbf03f4f38c49139ae94d01d23f03/src/gpgpu-sim/shader.cc#L264",
+          "kind": "simulator",
+          "note": "commit 4195dd4（2026-10-27）；按 warp slot 对 scheduler 数取模分配，是此模型的明确规则；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H02-s6",
+          "title": "Nsight Compute · Compute Triage",
+          "url": "https://docs.nvidia.com/nsight-compute/ComputeTriage/",
+          "kind": "official",
+          "note": "§3.2.5：线程参与率、predication 与 scheduler 指标联合解读；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "smsp__thread_inst_executed_per_inst_executed.ratio",
+          "meaning": "每条warp指令的平均线程参与度，稀疏活动mask可能使它下降。",
+          "caveat": "作用域为SMSP聚合；它不是occupancy，也不直接表示FLOPS利用率。",
+          "sourceId": "H02-s6"
+        },
+        {
+          "name": "smsp__thread_inst_executed_pred_on_per_inst_executed.ratio",
+          "meaning": "进一步统计谓词为真的线程参与度，用于区分活动线程与有效执行。",
+          "caveat": "需结合SASS、指令类型和动态计数；完整设备支持用 --query-metrics 查询。",
+          "sourceId": "H02-s6"
+        },
+        {
+          "name": "WorkloadDistribution",
+          "meaning": "观察SM/SMSP之间工作分配差异，检查平均值是否掩盖偏斜。",
+          "caveat": "section并不提供任意block固定映射的API契约。",
+          "sourceId": "H02-s4"
+        }
+      ],
+      "walkthrough": {
+        "title": "两个 block 的归属与一个 warp 的活动集合",
+        "assumption": "教学模型：2个SM，每个SM可容纳1个64线程block。每个block有2个32线程warp。图中mask仅表示逻辑参与集合，不表示物理ALU宽度。",
+        "nodes": [
+          {
+            "id": "g",
+            "label": "待分配 grid",
+            "kind": "state"
+          },
+          {
+            "id": "s0",
+            "label": "SM0",
+            "kind": "compute"
+          },
+          {
+            "id": "s1",
+            "label": "SM1",
+            "kind": "compute"
+          },
+          {
+            "id": "w",
+            "label": "B0 / W0",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "初始：两个独立block",
+            "explanation": "B0、B1尚未分配；应用不依赖它们的先后顺序。",
+            "active": [
+              "g"
+            ],
+            "values": {
+              "g": "B0、B1 待分配",
+              "s0": "空闲",
+              "s1": "空闲",
+              "w": "未驻留"
+            },
+            "edges": []
+          },
+          {
+            "title": "一种合法分配",
+            "explanation": "B0进入SM0，其两个warp都属于SM0。B1进入SM1。",
+            "active": [
+              "s0",
+              "s1"
+            ],
+            "values": {
+              "g": "无待分配",
+              "s0": "B0：W0、W1",
+              "s1": "B1：W0、W1",
+              "w": "所属SM0"
+            },
+            "edges": [
+              {
+                "to": "s0",
+                "label": "B0",
+                "from": "g"
+              },
+              {
+                "to": "s1",
+                "label": "B1",
+                "from": "g"
+              }
+            ]
+          },
+          {
+            "title": "B0/W0遇到分支",
+            "explanation": "lane0–15选择路径A，lane16–31选择路径B；warp身份仍不变。",
+            "active": [
+              "w"
+            ],
+            "values": {
+              "g": "无待分配",
+              "s0": "B0仍驻留",
+              "s1": "B1独立推进",
+              "w": "A:0–15；B:16–31"
+            },
+            "edges": [
+              {
+                "to": "w",
+                "label": "同一warp的两个集合",
+                "from": "s0"
+              }
+            ]
+          },
+          {
+            "title": "执行路径A",
+            "explanation": "本次指令仅更新A集合。B集合保留自己的线程状态。",
+            "active": [
+              "s0",
+              "w"
+            ],
+            "values": {
+              "g": "无待分配",
+              "s0": "发射路径A指令",
+              "s1": "B1独立推进",
+              "w": "active：lane0–15"
+            },
+            "edges": [
+              {
+                "to": "w",
+                "label": "本次参与16线程",
+                "from": "s0"
+              }
+            ]
+          },
+          {
+            "title": "执行路径B",
+            "explanation": "路径B被推进；此前空出的lane位置没有被B1的线程接管。",
+            "active": [
+              "s0",
+              "w"
+            ],
+            "values": {
+              "g": "无待分配",
+              "s0": "发射路径B指令",
+              "s1": "B1独立推进",
+              "w": "active：lane16–31"
+            },
+            "edges": [
+              {
+                "to": "w",
+                "label": "本次参与另16线程",
+                "from": "s0"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：保持工作量，改变 warp 内分支分布（未执行）",
+        "change": "比较按warp分组的条件与同一warp内交错的条件；保持总有效计算、输入与block配置一致。",
+        "expect": "warp内交错路径可能降低每条动态warp指令的有效线程数；不同warp各走单一路径则不构成warp内发散。",
+        "measure": "先看SASS是否编译成branch或predication，再看SourceCounters、线程参与比和普通运行时间。",
+        "confounds": "分支两侧工作量、编译器谓词化、寄存器数变化、负载不均与缓存访问变化。"
+      },
+      "atoms": [
+        {
+          "id": "H02.01",
+          "question": "同一 warp 的线程为什么还能保存不同变量和走不同分支？",
+          "explain": [
+            "每个 CUDA 线程有自己的寄存器值、线程索引和逻辑执行状态。SIMT 把适合一起推进的线程组成指令组，减少重复控制开销；共享指令不代表共享数据。两个 lane 使用同名寄存器时，通常读取的是各自线程的寄存器实例。",
+            "Volta 及之后的 Independent Thread Scheduling 维护每线程 PC 和调用栈，能够在子 warp 粒度分歧与汇合；更早架构用共享 warp PC 与 active mask 管理执行。程序的线程语义与某一代硬件控制状态的实现要分开，不能把所有 GPU 都画成32个独立 CPU。"
+          ],
+          "example": "lane0 中 x=3、lane1 中 x=7；同一加法指令 x+=1 后分别得到4和8。若条件 x>5，两者也可以进入不同路径。",
+          "pitfall": "“同一条指令”意味着32线程拥有同一个寄存器值。",
+          "check": {
+            "question": "线程有独立 PC 是否表示32条不同指令可在同一周期发射？",
+            "answer": "不是。独立执行状态不取消 SIMT 分组、发射及执行资源限制。"
+          },
+          "state": "每线程寄存器、逻辑 PC、谓词与所属 warp。",
+          "transition": "一次 SIMT 指令仅更新本次参与线程各自的状态。",
+          "prediction": "同一指令可产生不同数据结果，分支条件也可因线程而异。",
+          "sourceIds": [
+            "H02-s1"
+          ]
+        },
+        {
+          "id": "H02.02",
+          "question": "一条 warp 指令的32个 lane 是否一定都做有效工作？",
+          "explain": [
+            "warp 是由连续线程编号组成的32线程逻辑组，但一次动态指令可以只有一部分线程参与。退出、控制流分歧及 block 尾部都会减少活动线程；指令本身的谓词还可能进一步关闭其中的结果更新。",
+            "分析时分别统计 warp 指令次数与实际线程指令次数。同样发射100条 warp 指令，平均8个线程做有效工作与32个线程做有效工作，对有用算术的贡献差四倍。不要据此自动推断时间差四倍，因为发射成本、指令类型和执行管线粒度仍可能相同。"
+          ],
+          "example": "一个 warp 每次只让 lane0 执行加法，仍需要发射对应 warp 指令；它不能自动把剩下31个槽装入其他 warp 的线程。",
+          "pitfall": "把 warp 指令数乘32，无条件当作有效标量计算量。",
+          "check": {
+            "question": "平均 pred-on 线程数为8，warp occupancy却很高，是否矛盾？",
+            "answer": "不矛盾。前者描述指令参与度，后者描述驻留 warp 数，分母不同。"
+          },
+          "state": "一条动态指令、32位参与集合与每线程谓词。",
+          "transition": "指令发射后，仅 active 且谓词为真的线程提交该指令效果。",
+          "prediction": "减少参与线程可降低有效工作，未必同比减少发射次数。",
+          "sourceIds": [
+            "H02-s1",
+            "H02-s4",
+            "H02-s6"
+          ]
+        },
+        {
+          "id": "H02.03",
+          "question": "active mask 记录的是“哪些线程”，还是“哪些硬件核”？",
+          "explain": [
+            "active mask 是针对逻辑 lane 的集合。某条路径执行时，它决定哪些线程参与当前动态指令；另一路线程的状态保留，待其路径被执行。mask 随控制流变化，并不是一张固定的物理 ALU 开关图。",
+            "编写 warp collective 时还要区分“此刻活动的线程”与“必须参与这次协作的线程”。__activemask() 给出当前执行位置的活动快照；它不自动定义完整参与协议。参与 mask 应从算法条件与合法同步流程推导，尤其不能把分支内部偶然同批到达当成同步保证。"
+          ],
+          "example": "若预期 lane0–15 交换数据，参与集合应预先按条件构造，并确保这些未退出线程执行同一 collective；不能假定当前快照总是0x0000ffff。",
+          "pitfall": "用 __activemask() 替代同步，认为看到了同一 mask 就保证读写已经可见。",
+          "check": {
+            "question": "两个时刻的 active mask 不同，会改变线程的 warp 归属吗？",
+            "answer": "不会。mask 描述当前参与集合，warp 身份仍由线程分组决定。"
+          },
+          "state": "固定 warp 身份、当前路径和参与 mask。",
+          "transition": "控制流切换时更新参与集合；同步参与集合必须遵守相应 API 契约。",
+          "prediction": "分支使 mask 变稀疏，但不会把空 lane 交给其他 warp。",
+          "sourceIds": [
+            "H02-s1",
+            "H02-s3"
+          ]
+        },
+        {
+          "id": "H02.04",
+          "question": "32-thread warp 为什么不能直接等同于32个 ALU？",
+          "explain": [
+            "warp 宽度描述逻辑并行组，物理执行宽度描述特定数据类型与管线每周期能处理多少 lane 工作。一次 warp 指令可能分多拍完成 lane 处理；多个指令也可能在管线中重叠，因此“几拍覆盖所有 lane”和“多久可发下一条”仍是不同量。",
+            "以官方 Volta 调度说明为例，相关算术指令的执行跨两周期，而 scheduler 可每周期发射独立指令。这是特定架构和操作类型的说明，不能外推到 FP64、MUFU、Tensor 或所有后继架构。讨论吞吐前必须写出 SM、SMSP、warp 和 scalar operation 的单位。"
+          ],
+          "example": "教学模型每拍处理16个 lane，32-lane 指令需要两个 lane 批次；若内部流水化，下一条独立指令不一定必须等前一条结果完成。",
+          "pitfall": "把32线程 warp 推导成32结果在同一时钟完成。",
+          "check": {
+            "question": "warp size不变，FP64和FP32吞吐是否应相同？",
+            "answer": "不应。逻辑分组相同，但相应执行资源数量和速率可不同。"
+          },
+          "state": "逻辑32 lane、指令类型、物理处理宽度和流水阶段。",
+          "transition": "按该管线实际宽度处理 lane 工作，并在规定接收间隔接纳后续指令。",
+          "prediction": "改变指令类型可能改变吞吐，即使 warp 数和mask完全相同。",
+          "sourceIds": [
+            "H02-s3"
+          ]
+        },
+        {
+          "id": "H02.05",
+          "question": "一个 block 能否把自己的 warp 分到不同 SM 上？",
+          "explain": [
+            "通常的 CUDA thread block，也叫 CTA，是 SM 驻留与块内协作的基本单位。它的线程划为 warp，所有 warp 在同一 SM 上执行，从而共享该 block 的 shared memory 和块内 barrier。多个 block 可以同时驻留一个 SM，彼此保留独立的资源和同步状态。",
+            "warp 分配到 SM 内的调度子分区后，由相应 scheduler 推进；这种分配不意味着它脱离所属 block。Hopper 的 thread block cluster 进一步协调多个 block，它也不会把一个普通 block 拆成跨 SM 的几个 warp。理解层次有助于判断共享资源和同步范围。"
+          ],
+          "example": "一个256线程 block有8个warp。它们可分给同一SM内不同scheduler，但并非各自任选8个SM。",
+          "pitfall": "把 thread block cluster 与跨 SM 拆分单个 CTA 混为一谈。",
+          "check": {
+            "question": "两个 block 恰好在同一 SM，能直接使用彼此的普通 shared memory 吗？",
+            "answer": "不能。普通 shared memory 的作用域和分配属于各自 block；DSM 是另一个显式机制。"
+          },
+          "state": "block 身份、其 warp 集合、SM 归属和块内共享资源。",
+          "transition": "block 分配到SM后，其warp在该SM资源约束下各自推进。",
+          "prediction": "增大block会增加同一SM内的warp需求，而不会自动跨SM分摊。",
+          "sourceIds": [
+            "H02-s1",
+            "H02-s2",
+            "H02-s4"
+          ]
+        },
+        {
+          "id": "H02.06",
+          "question": "为什么同一 SM 内也可能出现一边忙、一边闲？",
+          "explain": [
+            "SM 不是所有资源都完全可互换的大池子。以 Volta 为例，四个 scheduler 各管理静态的一组 warp，并发射到其算术执行资源；NCU 用 SMSP 表达子分区作用域。shared memory 和部分缓存路径又在更高层共享，局部空闲与共享瓶颈可以同时出现。",
+            "因此要区分每个 SMSP 的可发射 warp 数、专用资源及共享资源。整 SM 平均有很多 warp，并不能证明每个 scheduler 都拥有足够 eligible warp。模拟器的 sub-core 配置有助于观察这一点，但其具体队列及 operand collector 划分仍是建模选择。"
+          ],
+          "example": "教学SM有4个scheduler，各持有2个warp；若只有S0的两个warp就绪，其他scheduler不能在静态归属模型中直接抢走它们发射。",
+          "pitfall": "把一个 SM 内所有 resident warp 视为任意 scheduler 随时可选的统一队列。",
+          "check": {
+            "question": "全SM平均 eligible=4，是否保证4个scheduler都能发射？",
+            "answer": "不保证。四个eligible可能集中在同一个子分区；还需要资源可用。"
+          },
+          "state": "scheduler归属、各SMSP候选集合及SM级共享资源。",
+          "transition": "只在本scheduler拥有的warp中判定就绪和仲裁。",
+          "prediction": "相同总warp数，不同分区分布可能产生不同空泡。",
+          "sourceIds": [
+            "H02-s3",
+            "H02-s4",
+            "H02-s5"
+          ]
+        },
+        {
+          "id": "H02.07",
+          "question": "CUDA 是否保证 block 0 先运行、block 1 随后运行？",
+          "explain": [
+            "普通 grid 中的 block 分配顺序不是程序可依赖的正确性契约。硬件根据可用执行容量安排工作；只有资源充足的 SM 才能接纳新 block。没有任何要求说相邻 block ID 必须落到相邻 SM，也没有要求按 ID 顺序完成。",
+            "算法应让 block 独立完成工作，或使用合法的跨 block 协作机制。用全局标志自旋等待一个尚未被安排的 block，可能因所有驻留槽都被等待者占据而无法前进。把数据布局优化建立在猜测的 block-to-SM 映射上，也会导致跨设备表现不稳。"
+          ],
+          "example": "教学SM只能驻留2个block；若B1、B2占满位置并等待尚未运行的B0，程序进展便依赖未获保证的调度。",
+          "pitfall": "拿一次日志中观察到的映射顺序，当作永久不变的硬件规则。",
+          "check": {
+            "question": "是否可以通过 blockIdx 直接推断物理 SM 编号？",
+            "answer": "不能。blockIdx是逻辑工作编号，SM分配是运行时安排。"
+          },
+          "state": "待执行block队列、各SM剩余资源、已驻留block。",
+          "transition": "有容量时接纳工作；完成后释放资源以允许后续block进入。",
+          "prediction": "在不依赖顺序的正确程序里，改变block完成顺序不应改变结果。",
+          "sourceIds": [
+            "H02-s2"
+          ]
+        },
+        {
+          "id": "H02.08",
+          "question": "TPC/GPC 在整卡结构里有什么用，是否等同 CUDA cluster？",
+          "explain": [
+            "GPC 和 TPC 是芯片组织层次，帮助理解 SM 之外的共享资源与请求路径。NCU 的硬件术语把 TPC 放在 GPC 内，TPC包含一个或多个SM及相关单元；GPC在整卡上重复。具体数量、缓存组织和图形功能随芯片型号变化。",
+            "CUDA thread block cluster 则是一个软件协作和调度概念，不应与这些缩写直接一一对应。阅读架构图时，先区分“物理包含关系”和“API可控制的合作范围”。指标名中的gpc、tpc、sm、smsp还提示不同聚合边界，整卡平均会隐藏局部竞争。"
+          ],
+          "example": "某份架构图展示 GPC→TPC→SM，而程序只有 grid/block/thread 索引。这并不说明应用能通过这些索引指定某个TPC。",
+          "pitfall": "把一个GPC的SM数量当成CUDA cluster的固定大小。",
+          "check": {
+            "question": "看到 tpc 作用域的计数，能当作一个SM的计数吗？",
+            "answer": "不能。先确认该芯片TPC包含的资源与指标聚合方式。"
+          },
+          "state": "芯片层次、资源共享边界和指标单位。",
+          "transition": "请求经过所属局部单元及共享路径；硬件层次并不自动成为软件索引。",
+          "prediction": "局部共享路径饱和时，增加同一范围内SM工作不一定线性增加吞吐。",
+          "sourceIds": [
+            "H02-s4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H03",
+      "kicker": "RESOURCES BEFORE RESIDENCY",
+      "question": "一个 block 要拿到哪些资源，才能真正开始工作？",
+      "summary": "把驻留理解为多种资源的共同准入，再区分理论容量、动态驻留、有效lane和尾部供给。",
+      "scope": "公式用于普通block的资源分析；寄存器粒度示例限定CC7.0。图中容量是便于计算的教学配置，不能替代目标设备occupancy API。",
+      "prerequisites": [
+        "H02：CTA、warp、SM归属",
+        "H01：指标口径"
+      ],
+      "sources": [
+        {
+          "id": "H03-s1",
+          "title": "CUDA Best Practices · Occupancy / Register allocation",
+          "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#occupancy",
+          "kind": "official",
+          "note": "CUDA 13.5，§11.1：寄存器容量、CC7.0的256寄存器/warp分配粒度及occupancy；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H03-s2",
+          "title": "CUDA Runtime API · Occupancy",
+          "url": "https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__OCCUPANCY.html",
+          "kind": "official",
+          "note": "CUDA 13.5，cudaOccupancyMaxActiveBlocksPerMultiprocessor 及动态shared memory容量查询；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H03-s3",
+          "title": "Nsight Compute UI · Occupancy Calculator",
+          "url": "https://docs.nvidia.com/nsight-compute/NsightCompute/index.html#occupancy-calculator",
+          "kind": "official",
+          "note": "§4.13：资源约束、未分配/碎片资源和occupancy曲线；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H03-s4",
+          "title": "Nsight Compute Profiling Guide · Launch Metrics",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "§2.4 Metrics Reference：registers、shared memory、waves元数据；§2.2 Occupancy section；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H03-s5",
+          "title": "CUDA Programming Guide · Hardware Multithreading",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#hardware-multithreading",
+          "kind": "official",
+          "note": "2026-10-31 更新，§3.2.2.2：ceil(T/32)个warp、资源驻留与launch限制；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H03-s6",
+          "title": "Volta Tuning Guide · Occupancy",
+          "url": "https://docs.nvidia.com/cuda/volta-tuning-guide/index.html#occupancy",
+          "kind": "official",
+          "note": "CUDA13.5，§1.4.1.3：GV100的64K寄存器、64warps及32blocks/SM等代际参数；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "launch__registers_per_thread",
+          "meaning": "定位每线程寄存器需求是否随代码变化；再对照Occupancy计算器的限制资源。",
+          "caveat": "不是实际RF吞吐；分配粒度和spill需要另查。",
+          "sourceId": "H03-s4"
+        },
+        {
+          "name": "launch__shared_mem_per_block_allocated",
+          "meaning": "读取按block实际分配的SMEM，用于判断缓冲stage是否跨驻留台阶。",
+          "caveat": "包括分配取整；同时记录静态、动态、driver份额。",
+          "sourceId": "H03-s4"
+        },
+        {
+          "name": "Occupancy / LaunchStats",
+          "meaning": "联合比较理论与achieved occupancy、block大小和限制资源。",
+          "caveat": "section先用 --list-sections查询；高驻留不保证高eligible或高吞吐。",
+          "sourceId": "H03-s4"
+        },
+        {
+          "name": "launch__waves_per_multiprocessor",
+          "meaning": "判断grid波次和部分尾波是否值得检查。",
+          "caveat": "它是launch估算，不是每个SM的精确时间线，也不能独自证明负载均衡。",
+          "sourceId": "H03-s4"
+        }
+      ],
+      "walkthrough": {
+        "title": "第三个 block 为什么必须等？",
+        "assumption": "教学SM：65536个32位寄存器、64KiB SMEM、最多32个warp。每block256线程=8warp，分配8192寄存器及24KiB SMEM；忽略额外分配粒度与分区。",
+        "nodes": [
+          {
+            "id": "q",
+            "label": "待进入 block",
+            "kind": "state"
+          },
+          {
+            "id": "rf",
+            "label": "寄存器",
+            "kind": "data"
+          },
+          {
+            "id": "smem",
+            "label": "Shared memory",
+            "kind": "data"
+          },
+          {
+            "id": "slot",
+            "label": "驻留 warp",
+            "kind": "compute"
+          }
+        ],
+        "steps": [
+          {
+            "title": "空SM与三个block",
+            "explanation": "B0、B1、B2按示意顺序等待；所有资源尚未分配。",
+            "active": [
+              "q"
+            ],
+            "values": {
+              "q": "B0、B1、B2",
+              "rf": "0 / 65536",
+              "smem": "0 / 64KiB",
+              "slot": "0 / 32"
+            },
+            "edges": []
+          },
+          {
+            "title": "接纳B0",
+            "explanation": "完整分配B0的资源；不能只因为部分资源够就拆分准入。",
+            "active": [
+              "rf",
+              "smem",
+              "slot"
+            ],
+            "values": {
+              "q": "B1、B2",
+              "rf": "8192 / 65536",
+              "smem": "24 / 64KiB",
+              "slot": "8 / 32"
+            },
+            "edges": [
+              {
+                "from": "q",
+                "to": "rf",
+                "label": "8192"
+              },
+              {
+                "from": "q",
+                "to": "smem",
+                "label": "24KiB"
+              },
+              {
+                "from": "q",
+                "to": "slot",
+                "label": "8warp"
+              }
+            ]
+          },
+          {
+            "title": "接纳B1",
+            "explanation": "SMEM使用量增至48KiB，还剩16KiB。",
+            "active": [
+              "rf",
+              "smem",
+              "slot"
+            ],
+            "values": {
+              "q": "B2",
+              "rf": "16384 / 65536",
+              "smem": "48 / 64KiB",
+              "slot": "16 / 32"
+            },
+            "edges": [
+              {
+                "from": "q",
+                "to": "smem",
+                "label": "再分配24KiB"
+              }
+            ]
+          },
+          {
+            "title": "B2被SMEM限制",
+            "explanation": "RF和warp槽仍够，然而剩余16KiB少于B2所需24KiB，B2不能进入。",
+            "active": [
+              "q",
+              "smem"
+            ],
+            "values": {
+              "q": "B2 等待",
+              "rf": "仍有49152空闲",
+              "smem": "仅余16KiB",
+              "slot": "仍有16槽"
+            },
+            "edges": [
+              {
+                "from": "smem",
+                "to": "q",
+                "label": "容量不足"
+              }
+            ]
+          },
+          {
+            "title": "B0完成，B2接替",
+            "explanation": "B0释放资源后，B2可完整分配。此时B1、B2共同驻留。",
+            "active": [
+              "q",
+              "rf",
+              "smem",
+              "slot"
+            ],
+            "values": {
+              "q": "队列空",
+              "rf": "16384 / 65536",
+              "smem": "48 / 64KiB",
+              "slot": "16 / 32"
+            },
+            "edges": [
+              {
+                "from": "smem",
+                "to": "q",
+                "label": "B0释放24KiB"
+              },
+              {
+                "from": "q",
+                "to": "smem",
+                "label": "B2取得24KiB"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：只增加动态 shared memory（未执行）",
+        "change": "保持kernel指令和block大小不变，在合法范围内提高launch的动态shared memory参数，扫描驻留台阶。",
+        "expect": "理论active blocks会在某些边界下降；只有工作负载依赖新增驻留并行性时，耗时才一定受影响。",
+        "measure": "用cudaOccupancyMaxActiveBlocksPerMultiprocessor与NCU Occupancy核对；记录普通耗时和寄存器数。",
+        "confounds": "shared memory carveout变化也可能影响L1；非法launch、grid不足、clock变化不能解释为occupancy效应。"
+      },
+      "atoms": [
+        {
+          "id": "H03.01",
+          "question": "SM 还有空闲算力，为什么新 block 仍进不来？",
+          "explain": [
+            "block 的准入要同时满足多个容量约束：寄存器、shared memory、线程/warp数量以及block槽位。它们不是可以相互替代的资源。仅有空闲ALU不够；如果block所需的任一资源无法完整分配，通常就必须等待先前block结束释放。",
+            "可把理论驻留数理解为各类约束允许的block数的最小值，但真实计算还要包含分配粒度、分区和架构保留开销。应使用目标GPU的occupancy API或NCU计算器，而不是把所有芯片都套进同一组容量。此处先讨论普通block，不含cluster等额外协作限制。"
+          ],
+          "example": "教学SM有64KiB shared memory，每block需24KiB；即使寄存器可放8个block，也只能同时放2个，剩余16KiB不足以接纳第三个。",
+          "pitfall": "认为只要计算利用率低，硬件就能无条件再塞更多block。",
+          "check": {
+            "question": "当shared memory已成为限制，减少一点寄存器一定提高驻留数吗？",
+            "answer": "不一定。若最小值仍由shared memory决定，驻留数不变。"
+          },
+          "state": "每block资源需求与SM各类可分配容量。",
+          "transition": "所有资源约束都满足才准入；block结束后释放其保留资源。",
+          "prediction": "只优化非限制资源，理论驻留数可能完全不变。",
+          "sourceIds": [
+            "H03-s1",
+            "H03-s2",
+            "H03-s3",
+            "H03-s5"
+          ]
+        },
+        {
+          "id": "H03.02",
+          "question": "为什么每线程只多用几个寄存器，会影响整个 block 的驻留？",
+          "explain": [
+            "线程本地寄存器值需要片上存储，多个驻留warp共同消耗有限RF容量。一个block的粗略寄存器需求随线程数与每线程寄存器数增加，但最终分配必须按硬件粒度计算，而非简单把源码变量数相乘。编译器还可能复用寄存器或将值溢出到local memory。",
+            "降低每线程寄存器数有机会增加驻留block，却可能引入spill、额外指令或更少ILP。因此“寄存器越少越好”不是目标；正确目标是有效工作耗时更低。先查看编译器资源报告，再用occupancy API定位是否跨过真正的容量台阶。"
+          ],
+          "example": "简化为64K个32位寄存器、256线程/block且忽略粒度：64寄存器/线程需16K/block，寄存器约束最多允许4个block。",
+          "pitfall": "把C++局部变量个数当成最终寄存器数，或忽略一个64位值可能占多个32位寄存器。",
+          "check": {
+            "question": "把寄存器上限压低后 occupancy增加却变慢，可能原因是什么？",
+            "answer": "spill流量、更多重计算或ILP下降可能大于新增驻留warp的收益。"
+          },
+          "state": "RF容量、编译后每线程寄存器数、block大小及spill。",
+          "transition": "资源分配按编译后的需求和架构粒度执行，超过容量则限制新block准入。",
+          "prediction": "跨过寄存器限制台阶可能提升驻留，但运行时间需独立测量。",
+          "sourceIds": [
+            "H03-s1",
+            "H03-s2",
+            "H03-s6"
+          ]
+        },
+        {
+          "id": "H03.03",
+          "question": "资源分配为什么会形成台阶，而不是平滑变化？",
+          "explain": [
+            "硬件以一定粒度分配寄存器，需求通常要向上取整。多出来的几个逻辑寄存器可能使整个warp增加一个分配块；累积到block或SM后，原本能容纳的最后一个block就被挤出去。这正是寄存器压力常出现突变而非平滑变化的原因。",
+            "CC7.0的官方示例采用每warp256个寄存器的分配粒度，不能不加验证地用于全部架构。资源计算还需处理每block上限与子分区限制。优化时观察“allocated”与逻辑用量的差异，并围绕真实台阶做小范围扫描。"
+          ],
+          "example": "CC7.0粒度示意：32寄存器/线程时每warp需1024；33时逻辑需1056，但向上取整成1280。差1个/线程会增加256个/warp的分配。",
+          "pitfall": "按65536除以线程数与逻辑寄存器数所得的小数直接预测驻留。",
+          "check": {
+            "question": "33降到32为什么可能比40降到39更有影响？",
+            "answer": "前者可能跨过分配粒度边界；后者可能仍落在同一分配档位。"
+          },
+          "state": "逻辑需求、分配粒度、向上取整后的allocated需求。",
+          "transition": "每个分配单位向上取整，再检查block/SM可容纳数量。",
+          "prediction": "靠近边界的微小改动，可能造成驻留warp数的离散跃迁。",
+          "sourceIds": [
+            "H03-s1",
+            "H03-s3",
+            "H03-s6"
+          ]
+        },
+        {
+          "id": "H03.04",
+          "question": "shared memory 换来数据复用，为什么有时反而拖慢 kernel？",
+          "explain": [
+            "shared memory常按block保留，用于复用tile、减少全局流量或交换线程间数据。增加tile或stage会增加每block占用，因而可能减少同时驻留的block和warp。算法获得的复用收益，与丢失的延迟隐藏能力需要放在一起计算。",
+            "可用SMEM容量还受设备、每block上限、动态shared memory配置及L1/SMEM carveout影响。给kernel保留更多shared memory，并不等于该kernel自动产生更多并行工作。应该联合记录全局流量、SMEM占用、理论驻留和最终时间，避免只盯一个数字。"
+          ],
+          "example": "教学容量96KiB：每block从24KiB增至40KiB，SMEM约束的驻留数从4降为2；若流量并未相应减少，新增缓冲可能得不偿失。",
+          "pitfall": "只凭数据放在片上就断言更快，不计算驻留、同步和搬运代价。",
+          "check": {
+            "question": "双缓冲比单缓冲慢，先看哪些变化？",
+            "answer": "看SMEM是否跨驻留台阶，同时检查复制计算是否真的重叠、同步是否正确。"
+          },
+          "state": "SMEM有效容量、每block静态和动态分配、缓冲stage数量。",
+          "transition": "block准入占用整份shared memory预算，完成后才释放给其他block。",
+          "prediction": "增加stage可能提升重叠，也可能因驻留下降使延迟更难隐藏。",
+          "sourceIds": [
+            "H03-s1",
+            "H03-s2",
+            "H03-s3",
+            "H03-s4"
+          ]
+        },
+        {
+          "id": "H03.05",
+          "question": "寄存器和 shared memory 都够，为什么 occupancy 仍上不去？",
+          "explain": [
+            "SM还有最大线程数、最大warp数和最大resident block数等独立上限。小block可能先用尽block槽位，却未用完线程容量；大block可能因线程上限或剩余空间碎片而无法再加入一个block。资源需求很小不意味着驻留数量没有上限。",
+            "先查询实际设备属性，再把每block的ceil(T/32)个warp带入约束。不要混淆每block最大线程数与每SM最大驻留线程数；超过前者可能launch非法，碰到后者只是限制同时驻留数。不同compute capability的上限应分别记录。"
+          ],
+          "example": "教学SM最多8个block、32个warp。每block1个warp，即使其他资源无限，也只有8个resident warp，理论occupancy为25%。",
+          "pitfall": "认为block越小，必然越容易填满SM。",
+          "check": {
+            "question": "64个线程的block有几个warp？能否忽略block槽位？",
+            "answer": "它有2个warp；block槽位仍然可能先成为限制。"
+          },
+          "state": "block/warp/thread三种容量上限及每block需求。",
+          "transition": "取所有独立上限允许的block数的最小值；不足一个完整block的剩余容量不能利用。",
+          "prediction": "在block槽位限制时，适度增大block可能提高resident warp数量。",
+          "sourceIds": [
+            "H03-s2",
+            "H03-s3",
+            "H03-s5"
+          ]
+        },
+        {
+          "id": "H03.06",
+          "question": "一个33线程 block 为什么需要两个 warp？",
+          "explain": [
+            "block按连续线程编号分成32线程的warp，因此warp数是ceil(T/32)。33个线程形成一个满warp和一个只有1个有效线程的尾warp。尾warp仍是调度与资源跟踪中的warp，不能与另一个block的尾线程拼成一个满warp。",
+            "它造成的影响至少包括发射时有效线程比例降低，以及按warp分配资源带来的浪费。occupancy以warp为单位时可能看起来并不低，但有效lane工作仍很少。小规模问题可以用每线程处理多个元素、把工作打包或选择更合适的block尺寸改善；仍需保留越界保护。"
+          ],
+          "example": "33线程/block共2个warp，逻辑64个lane位置里只有33个线程；这与64线程/block的2个满warp并不具有相同有效工作量。",
+          "pitfall": "认为多个33线程block的尾warp会自动合并成一个满warp。",
+          "check": {
+            "question": "为什么高warp occupancy仍可能伴随低有效线程比？",
+            "answer": "驻留warp数把尾warp算在内，而每条指令实际参与的线程可能很少。"
+          },
+          "state": "block线程数T、ceil(T/32)个warp及尾warp参与集合。",
+          "transition": "最后一个warp中超出T的lane没有线程，不参与指令。",
+          "prediction": "T从32增至33会新增一个warp，资源需求可能出现台阶。",
+          "sourceIds": [
+            "H03-s1",
+            "H03-s5"
+          ]
+        },
+        {
+          "id": "H03.07",
+          "question": "theoretical occupancy 与 achieved occupancy 各自说明什么？",
+          "explain": [
+            "理论occupancy由launch配置和资源上限计算：在有足够工作且允许的条件下，每SM最多能驻留多少warp。achieved occupancy则根据运行时resident warp的统计得到，受到grid大小、启动与排空、block寿命不均以及执行阶段变化影响。",
+            "两者都不是有效算力利用率，也不等于eligible warp比例。很多resident warp可以同时等待同一批内存；少量warp也可能凭足够ILP填满某条管线。理论高但实际低时先排查供给和尾部；实际高却发射差时再看依赖、同步或资源throttle。"
+          ],
+          "example": "某配置理论可放64个warp，但整个grid只有一个256线程block；最多只有8个warp被提供给某个SM，其他SM甚至没有工作。",
+          "pitfall": "把achieved occupancy 80%解释成执行单元80%的峰值FLOPS。",
+          "check": {
+            "question": "occupancy更高但eligible更低，是不可能的吗？",
+            "answer": "可能。更多warp被驻留，但其下一条指令都在等待依赖或同步。"
+          },
+          "state": "理论驻留上限、运行时各SM的resident warp数量和统计窗口。",
+          "transition": "block进入/离开改变resident数量；是否eligible由另一套条件决定。",
+          "prediction": "grid不足或长尾会拉低实际驻留，但资源计算出的理论上限不变。",
+          "sourceIds": [
+            "H03-s1",
+            "H03-s3",
+            "H03-s4",
+            "H03-s5"
+          ]
+        },
+        {
+          "id": "H03.08",
+          "question": "最后少数 block 为什么会拖住整个 kernel？",
+          "explain": [
+            "block执行时间可能因输入、分支、缓存或竞争而不同。许多block已结束后，剩余少数block仍在某些SM上运行；全局工作供给不足以继续填满所有SM，形成tail effect。此时单个慢block可以决定kernel结束时刻。",
+            "同一block内部也可能出现部分warp先退出、其余warp继续推进，实际resident warp随时间减少。应区分“最后一波不足”和“每个block内部工作不均”，因为前者可通过更细的任务切分改善，后者可能需要改变工作映射。平均计数会把这些阶段混在一起。"
+          ],
+          "example": "教学4个SM各接1个block，前三个在时刻10结束，第四个在时刻30结束。后20个时间单位只有一个SM工作，尾部占据总时间的三分之二。",
+          "pitfall": "看到整个kernel平均利用率低，就认定每个时刻都缺少warp或每个SM都慢。",
+          "check": {
+            "question": "增加同样的短block能消除已有长block的最终尾部吗？",
+            "answer": "不一定。必须考察长任务能否拆分、再分配，以及新工作是否改变关键路径。"
+          },
+          "state": "待执行block数、每block剩余工作、SM空闲状态。",
+          "transition": "block完成释放资源；若队列已空，该SM进入空闲直到grid结束。",
+          "prediction": "负载方差变大，即使总工作量不变，最后完成时间也可能上升。",
+          "sourceIds": [
+            "H03-s3",
+            "H03-s4",
+            "H03-s5"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H04",
+      "kicker": "ONE ISSUE AT A TIME",
+      "question": "这一周期，谁有资格发射，谁最终被选中？",
+      "summary": "将驻留、就绪、仲裁、发射与完成拆开；再用LRR/GTO、跨warp并行和warp内ILP解释不同的时间线。",
+      "scope": "静态归属以Volta官方说明为参照；LRR/GTO来自已固定commit的GPGPU-Sim模型。所有演示时延均为教学参数，不代表NVIDIA通用调度算法或实测周期。",
+      "prerequisites": [
+        "H02：warp和scheduler归属",
+        "H03：resident warp的来源",
+        "H01：latency、吞吐及计数器口径"
+      ],
+      "sources": [
+        {
+          "id": "H04-s1",
+          "title": "Volta Tuning Guide · Instruction Scheduling",
+          "url": "https://docs.nvidia.com/cuda/volta-tuning-guide/index.html#instruction-scheduling",
+          "kind": "official",
+          "note": "CUDA13.5，§1.4.1.1：静态warp归属、独立指令发射与Volta算术依赖；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H04-s2",
+          "title": "Nsight Compute Profiling Guide · Hardware Model / Warp Stall Reasons",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "§2.3硬件模型及§2.4.7 PC采样；not_selected与selected不是依赖stall；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H04-s3",
+          "title": "GPGPU-Sim · scheduler_unit::cycle / order_lrr / gto_scheduler::order_warps",
+          "url": "https://github.com/accel-sim/gpgpu-sim_distribution/blob/4195dd4f229cbf03f4f38c49139ae94d01d23f03/src/gpgpu-sim/shader.cc#L1386",
+          "kind": "simulator",
+          "note": "已读commit4195dd4（2026-10-27），order_lrr约L1386、cycle约L1477、GTO约L1827；依赖和执行入口检查由cycle完成；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H04-s4",
+          "title": "Nsight Compute · Compute Triage",
+          "url": "https://docs.nvidia.com/nsight-compute/ComputeTriage/",
+          "kind": "official",
+          "note": "§3.2.5：active、eligible、issue-active组合，以及stall语义限制；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H04-s5",
+          "title": "CUDA Programming Guide · Hardware Implementation",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#hardware-implementation",
+          "kind": "official",
+          "note": "2026-10-31更新，§3.2.2：顺序发射、硬件多线程与程序依赖；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H04-s6",
+          "title": "Jia et al. · Volta scheduler microbenchmark",
+          "url": "https://arxiv.org/pdf/1804.06826",
+          "kind": "paper",
+          "note": "2018，§2.2：通过V100上活动warp组合研究子分区映射；不据此推广通用调度policy；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "smsp__warps_active.avg.per_cycle_active",
+          "meaning": "每个SMSP在活动周期内平均resident warp数，是候选供给的上游。",
+          "caveat": "高值不代表这些warp可发射；avg也可能隐藏子分区不均。",
+          "sourceId": "H04-s4"
+        },
+        {
+          "name": "smsp__warps_eligible.avg.per_cycle_active",
+          "meaning": "活动周期内平均eligible warp数；依赖被隐藏后，在相同工作量下可能增加。",
+          "caveat": "需与issue-active和管线负载联合看，不存在跨架构通用最佳阈值。",
+          "sourceId": "H04-s4"
+        },
+        {
+          "name": "smsp__issue_active.avg.per_cycle_active",
+          "meaning": "观测scheduler发射活跃程度，区分无候选空泡与正常竞争。",
+          "caveat": "它不是有效FLOPS比例；完整支持以目标芯片 --query-metrics 为准。",
+          "sourceId": "H04-s4"
+        },
+        {
+          "name": "smsp__pcsamp_warps_issue_stalled_not_selected",
+          "meaning": "PC采样中eligible但落选的warp状态；增加就绪供给可能使样本上升。",
+          "caveat": "这是采样状态而非依赖stall，不可直接换算成全GPU损失周期。",
+          "sourceId": "H04-s2"
+        }
+      ],
+      "walkthrough": {
+        "title": "resident、eligible、issued：三个集合不能混用",
+        "assumption": "单scheduler拥有W0、W1、W2，每次仲裁最多发射1条；W0有一条在窗口开始前已发射、尚未完成的load。帧展示状态事件而非等间隔真实GPU周期。",
+        "nodes": [
+          {
+            "id": "w0",
+            "label": "W0",
+            "kind": "state"
+          },
+          {
+            "id": "w1",
+            "label": "W1",
+            "kind": "state"
+          },
+          {
+            "id": "w2",
+            "label": "W2",
+            "kind": "state"
+          },
+          {
+            "id": "p",
+            "label": "执行入口",
+            "kind": "compute"
+          },
+          {
+            "id": "r",
+            "label": "数据返回",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "三个warp都已驻留",
+            "explanation": "W0等待load结果；W1、W2的下一条指令有输入且执行入口可用。",
+            "active": [
+              "w0",
+              "w1",
+              "w2"
+            ],
+            "values": {
+              "w0": "resident / 等依赖",
+              "w1": "resident / eligible",
+              "w2": "resident / eligible",
+              "p": "空闲",
+              "r": "W0的load未完成"
+            },
+            "edges": []
+          },
+          {
+            "title": "本次选择W1",
+            "explanation": "W1通过仲裁；W2同样eligible却未选中，W0则不是eligible。",
+            "active": [
+              "w1",
+              "p"
+            ],
+            "values": {
+              "w0": "等依赖",
+              "w1": "selected → issued",
+              "w2": "eligible / 未选中",
+              "p": "接收W1指令",
+              "r": "仍未返回"
+            },
+            "edges": [
+              {
+                "from": "w1",
+                "to": "p",
+                "label": "发射"
+              }
+            ]
+          },
+          {
+            "title": "发射不是完成",
+            "explanation": "W1的指令进入执行路径。W2仍可在后续机会发射；W0不能提前消费数据。",
+            "active": [
+              "p"
+            ],
+            "values": {
+              "w0": "等依赖",
+              "w1": "指令在途",
+              "w2": "eligible",
+              "p": "在途操作≠入口永远忙",
+              "r": "仍未返回"
+            },
+            "edges": []
+          },
+          {
+            "title": "W0的旧load完成",
+            "explanation": "数据在完成阶段更新，W0的消费者才解除RAW依赖。",
+            "active": [
+              "r",
+              "w0"
+            ],
+            "values": {
+              "w0": "输入满足",
+              "w1": "按下一指令分类",
+              "w2": "按下一指令分类",
+              "p": "检查目标资源",
+              "r": "load结果有效"
+            },
+            "edges": [
+              {
+                "from": "r",
+                "to": "w0",
+                "label": "依赖释放"
+              }
+            ]
+          },
+          {
+            "title": "重新形成候选集合",
+            "explanation": "若W0的指令已准备且资源允许，它成为eligible；下一次仲裁仍需与其他候选竞争。",
+            "active": [
+              "w0",
+              "p"
+            ],
+            "values": {
+              "w0": "eligible",
+              "w1": "资格取决于下一条",
+              "w2": "资格取决于下一条",
+              "p": "每次最多1条",
+              "r": "有效数据保留"
+            },
+            "edges": [
+              {
+                "from": "w0",
+                "to": "p",
+                "label": "候选；不保证获选"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：分别增加TLP与ILP（未执行）",
+        "change": "先保持单warp指令结构改变resident warp供给；再固定launch，改变独立累加器数量。",
+        "expect": "依赖受限阶段可能减少无eligible空泡；已饱和管线不会因增加warp而突破吞吐上限。",
+        "measure": "检查SASS顺序，联合active、eligible、issue-active、not_selected和普通kernel时间。",
+        "confounds": "寄存器与SMEM改变驻留、各SMSP分布不均、cache竞争、循环体和指令种类变化。"
+      },
+      "atoms": [
+        {
+          "id": "H04.01",
+          "question": "scheduler 的候选池包含整个 SM 的 warp 吗？",
+          "explain": [
+            "先确定所有权，再讨论选择。Volta官方说明每个scheduler管理静态的一组warp，发射到其对应算术资源。一个scheduler空闲，不意味着它能把另一个scheduler的ready warp直接拿来使用。只看全SM总数会忽略局部供给不足。",
+            "模拟器也需显式建模归属：所引shader.cc按warp slot编号对scheduler数取模分配。这个取模规则是模型代码的定义，不等于所有芯片、所有运行阶段都使用相同可见映射。比较策略时应保持归属不变，否则测到的是调度与迁移机制的混合变化。"
+          ],
+          "example": "教学模型S0持有W0/W2、S1持有W1/W3。若W0/W2都等数据，S0保持空闲；即使W1/W3就绪，也只在S1内部竞争。",
+          "pitfall": "为了让动画看起来更满，允许scheduler随意偷取别的分区warp。",
+          "check": {
+            "question": "全SM有两个ready warp，是否一定可以同时发两条？",
+            "answer": "不一定。它们可能属于同一scheduler，且相应发射或执行资源也有限。"
+          },
+          "state": "固定scheduler ID、其所属warp集合与局部执行入口。",
+          "transition": "只对所属warp进行有效性、依赖、资源检查和仲裁。",
+          "prediction": "ready warp集中在同一所有权分区时，其他scheduler可能空闲。",
+          "sourceIds": [
+            "H04-s1",
+            "H04-s2",
+            "H04-s3",
+            "H04-s6"
+          ]
+        },
+        {
+          "id": "H04.02",
+          "question": "resident warp 到底还缺什么，才能成为 eligible？",
+          "explain": [
+            "resident只说明warp已有片上状态和资源。要成为可发射候选，至少需要下一条指令已准备、输入依赖满足、同步条件允许，并且目标执行路径可接纳。单独增加resident warp，若它们一起等同一数据或barrier，eligible仍可能很少。",
+            "所引模拟器把这些检查分散在ibuffer、waiting、scoreboard和执行入口容量中；NCU提供的是硬件观测术语，不应把某一个模拟器布尔变量直接当作NCU的精确实现。定位时先区分取指不足、依赖等待、同步等待和资源throttle，再决定增加并行性是否有效。"
+          ],
+          "example": "W0驻留且下一条是使用load结果的FMA，load还未返回，所以不eligible。W1同样驻留但输入齐全、入口可用，可以参与仲裁。",
+          "pitfall": "把active/resident画成ready，忽略在途依赖和barrier。",
+          "check": {
+            "question": "所有resident warp都已分到寄存器，为什么可能零发射？",
+            "answer": "寄存器容量只解决存放问题，寄存器中的待生产值、取指或执行资源仍可能未就绪。"
+          },
+          "state": "resident状态、队首指令、依赖、同步状态和目标入口。",
+          "transition": "所有必要条件满足才进入eligible集合；任一条件失败都不能发射该指令。",
+          "prediction": "只增加等待同一条件的warp，eligible数量可能不变。",
+          "sourceIds": [
+            "H04-s2",
+            "H04-s3",
+            "H04-s4"
+          ]
+        },
+        {
+          "id": "H04.03",
+          "question": "eligible 的 warp 为什么还可能没有发射？",
+          "explain": [
+            "eligible表示具备发射条件，不等于已经占有这一周期的发射机会。多个候选需要仲裁，选择受到scheduler容量、policy、指令类型和其他内部约束影响。selected指本次被选中；issued还需明确发射边界，而不是把候选数量直接当成已完成工作。",
+            "专业分析应把“没有合格候选”和“候选很多但每次只能服务有限个”分开。前者可能需要更多TLP/ILP或缩短依赖；后者在发射持续繁忙时并非需要修复的空泡。真实NVIDIA完整policy未公开，教学可使用LRR/GTO比较机制，但不能据此宣称硬件严格照办。"
+          ],
+          "example": "教学scheduler每周期发射1条，W0/W1/W2都eligible；本次选W1，另外两个是not_selected，而非发生新的数据依赖。",
+          "pitfall": "把所有未被发射的warp都归为同一种stall原因。",
+          "check": {
+            "question": "有3个eligible但只发1条，issue-active会是多少？",
+            "answer": "在每周期最多1次发射的教学模型中，该周期issue-active是100%；两个落选不代表两周期损失。"
+          },
+          "state": "候选集合、仲裁顺序和每周期发射容量。",
+          "transition": "从eligible集合选择不超过容量的warp，其余保留下一轮候选资格。",
+          "prediction": "eligible继续增加会增加落选者，未必增加同一周期发射数量。",
+          "sourceIds": [
+            "H04-s2",
+            "H04-s3",
+            "H04-s4"
+          ]
+        },
+        {
+          "id": "H04.04",
+          "question": "为什么发射了 load，却还不能立刻使用结果？",
+          "explain": [
+            "issue是把指令交给后续执行路径的事件，completion是操作完成并满足消费条件的事件。两者之间可能经过操作数收集、流水阶段、请求队列、缓存或内存返回。已经issued的指令仍可以在途，依赖它的后续指令必须等待。",
+            "教学时要规定时间相位：先完成到期操作，再更新依赖，之后分类、仲裁和发射。若定义在周期c发射、延迟L，则结果在c+L开头可用。对真实硬件，发射入口与执行管线接受还可能由中间队列解耦；这里只在明确简化时把它们合并。"
+          ],
+          "example": "load在周期0发射，教学延迟6，则消费者最早在周期6的完成阶段之后变就绪；周期1到5都不能把数据当作已经返回。",
+          "pitfall": "一点击“下一周期”就同时发射并完成所有指令，导致依赖在同周期被提前释放。",
+          "check": {
+            "question": "执行管线里还有指令时，能不能接收下一条独立指令？",
+            "answer": "可能。只要入口和资源允许，in-flight不等于不能继续接收。"
+          },
+          "state": "指令发射时刻、到期时刻、目标值有效标记和消费者依赖。",
+          "transition": "只有完成阶段才更新值和释放相应依赖；issue仅登记在途工作。",
+          "prediction": "固定指令流下，把依赖结果提早标为ready会产生不合法的虚假加速。",
+          "sourceIds": [
+            "H04-s2",
+            "H04-s3",
+            "H04-s5"
+          ]
+        },
+        {
+          "id": "H04.05",
+          "question": "LRR 是每个 warp 固定轮流占一个周期吗？",
+          "explain": [
+            "在所引GPGPU-Sim实现中，Loose Round Robin从上次成功发射warp之后开始建立循环优先序。scheduler随后按这个顺序检查候选，跳过已退出、等待或不具备资源的warp。它不是严格要求每个warp无论ready与否都占一个空白时间片。",
+            "因此实际发射序列还取决于依赖、队列和指令供给。比较LRR时应记录上次成功发射者以及候选集合，并明确没有任何warp发射时指针是否改变。这里依据固定commit的模型规则解释，真实NVIDIAscheduler不被此策略名称所约束。"
+          ],
+          "example": "上次发射W0，下轮检查顺序W1→W2→W0。若W1等数据、W2就绪，则选W2；下次从W0开始，而不是给W1强留一个空周期。",
+          "pitfall": "把LRR演示成不看ready状态的机械时间片轮转。",
+          "check": {
+            "question": "LRR总能让每个warp获得完全相同的发射次数吗？",
+            "answer": "不能。不同warp就绪时间、退出时刻和指令需求都可能不同。"
+          },
+          "state": "固定环形warp顺序、上次成功发射位置与本周期候选。",
+          "transition": "从上一成功发射者之后扫描，选择第一个满足发射条件的warp。",
+          "prediction": "暂时阻塞的warp会被跳过，避免无谓空槽。",
+          "sourceIds": [
+            "H04-s3"
+          ]
+        },
+        {
+          "id": "H04.06",
+          "question": "GTO 的“oldest”到底按什么排序？",
+          "explain": [
+            "Greedy Then Oldest先尝试继续服务上次发射的warp；它不能发射时，再偏向更老的候选。所引GPGPU-Sim用dynamic warp ID表达动态进入次序，已退出或处于waiting状态的warp被降低优先级，最终仍需通过scheduler中的依赖和资源检查。",
+            "“年龄”不是静态threadIdx、blockIdx或某条指令等待的时间。模型中新的warp复用一个物理slot时，slot编号与动态年龄不同。GTO可能促进某些局部性，也可能改变跨warp进展分布；没有哪种policy对所有访存和同步模式都必然更优。"
+          ],
+          "example": "W2是上次发射者，只要其下一条独立指令仍可发射，GTO可继续选W2；W2阻塞后，再从其余候选中检查dynamic ID更老者。",
+          "pitfall": "把GTO理解成永远选静态编号最小的warp，或把它称为所有NVIDIA GPU默认算法。",
+          "check": {
+            "question": "如果一个老warp不eligible，GTO应强行发射它吗？",
+            "answer": "不应。policy改变优先顺序，不绕过依赖与资源约束。"
+          },
+          "state": "上次发射warp、动态年龄、候选集合与退出状态。",
+          "transition": "先尝试greedy对象；失败后按模型规定的年龄顺序寻找可发射者。",
+          "prediction": "同一依赖图用GTO与LRR可产生不同交错顺序，但都必须保持结果正确。",
+          "sourceIds": [
+            "H04-s3"
+          ]
+        },
+        {
+          "id": "H04.07",
+          "question": "更多 warp 是怎样隐藏延迟的，而不是缩短延迟的？",
+          "explain": [
+            "某个warp等待结果时，scheduler可以发射另一个所属warp的就绪指令。这样把空闲发射周期填入有用工作，改善整体吞吐；原先那个操作的结果延迟并没有因此缩短。TLP的收益来自在等待间隙找到独立工作。",
+            "需要的warp数量取决于依赖延迟、每warp可暴露的独立指令、发射宽度与资源归属。简单的“延迟乘吞吐”只给出在特定稳态假设下所需并行量，不能替代测量。若所有warp同步等待或某条资源已经饱和，继续增加驻留warp会失去收益，甚至增加缓存竞争。"
+          ],
+          "example": "教学模型每warp只有一条依赖链、latency=3、每周期发1条；3个总能轮流ready的warp可覆盖空隙，单warp则每3周期才推进一次。",
+          "pitfall": "说增加occupancy能让一条HBM load的物理延迟变小。",
+          "check": {
+            "question": "更多warp后not_selected增多、耗时下降，是否相互矛盾？",
+            "answer": "不矛盾。候选供给更充足，同时带来更多落选者和更少无候选空泡。"
+          },
+          "state": "同一scheduler的多个独立warp、各自依赖与发射入口。",
+          "transition": "本warp不可发射时，其他eligible warp可占用该周期。",
+          "prediction": "只要新增warp提供不同的就绪时机，空闲发射周期可能减少。",
+          "sourceIds": [
+            "H04-s1",
+            "H04-s2",
+            "H04-s4",
+            "H04-s5"
+          ]
+        },
+        {
+          "id": "H04.08",
+          "question": "warp 内 ILP 能否让 scheduler 越过阻塞指令找后面的工作？",
+          "explain": [
+            "ILP要求在实际指令顺序中暴露独立操作，通常由编译器或开发者安排多个累加器、提前地址计算和加载。GPU的顺序发射模型不会任意跳过一个依赖未满足的队首指令，再从后面动态挑一条独立指令。",
+            "因此源码中存在独立性还不够：要检查最终SASS把独立操作放在何处，以及寄存器生命周期是否明显增加。更多ILP可减少需要的resident warp数量，但若寄存器压力使occupancy下降或产生spill，最终效果可能反转。TLP与ILP应分别改变，避免无法归因。"
+          ],
+          "example": "A写R0；B读R0；C与A无关。顺序A,B,C时B会挡住C；改为语义合法的A,C,B后，C才可能填进等待间隙。",
+          "pitfall": "把ILP画成CPU式动态乱序窗口，允许跳过任何未ready的指令。",
+          "check": {
+            "question": "把独立累加器从2个增至8个需要检查哪个副作用？",
+            "answer": "检查寄存器数量、spill与驻留变化，不能只看依赖链缩短。"
+          },
+          "state": "按程序顺序排列的指令、每个目标寄存器及活跃区间。",
+          "transition": "只检查下一条允许发射的指令；独立工作必须已被合法安排到队首。",
+          "prediction": "在不spill且资源未饱和时，适度增加独立链可能提高eligible供给。",
+          "sourceIds": [
+            "H04-s1",
+            "H04-s3",
+            "H04-s5"
+          ]
+        },
+        {
+          "id": "H04.09",
+          "question": "两条独立指令为什么不一定能在同一周期发射？",
+          "explain": [
+            "数据独立只是必要条件之一。多发射还可能要求多个发射槽、不同执行路径、入口缓冲容量、操作数带宽以及架构允许的指令配对。不同代际、不同指令类别的发射规则不能用“有两个执行单元”简单推导。",
+            "所引模拟器用每warp最大issue数和是否要求不同execution unit等配置控制这类行为，说明policy和资源限制是分开的。硬件分析应先确认官方代际说明或经过验证的微基准，再判断是入口发射限制还是下游执行限制；不要把模型参数当作真实硬件保证。"
+          ],
+          "example": "两条FMA即使读写不同寄存器，若只共享一个每周期接收1条的入口，本周期仍只能发1条；增加第二种管线也不会自动增加发射槽。",
+          "pitfall": "认为两条指令没有RAW，就一定支持dual issue。",
+          "check": {
+            "question": "同时存在FP32与INT32资源，能推出任意一对指令同时发射吗？",
+            "answer": "不能。还需要发射、操作数、配对和目标资源条件都满足。"
+          },
+          "state": "可用发射槽、指令配对规则、输入依赖与各执行入口。",
+          "transition": "每次接受一条后更新资源，再检查下一条是否仍满足所有约束。",
+          "prediction": "下游资源增加但发射槽不变时，峰值发射次数可能不变。",
+          "sourceIds": [
+            "H04-s1",
+            "H04-s3",
+            "H04-s6"
+          ]
+        },
+        {
+          "id": "H04.10",
+          "question": "not_selected 高，是不是说明 scheduler 在浪费机会？",
+          "explain": [
+            "NCU把not_selected定义为已经eligible、但这一周期另一个warp被选中的状态。它表明存在候选竞争，不能直接当作依赖等待，也不能把它的样本比例解读为同样比例的全局空闲周期。一个持续发射的scheduler完全可能产生很多not_selected样本。",
+            "判断好坏要同时看issue-active、eligible数量、执行管线利用率和kernel时间。高not_selected可能意味着并行量已经足够，可以尝试减少warp换取更少寄存器压力或更好缓存局部性；也可能只是正常仲裁。优化目标是更快完成有用工作，不是把每种带stalled字样的计数都降为零。"
+          ],
+          "example": "每周期4个warp就绪、只选1个，其他3个落选；连续100周期都有发射时，scheduler没有因此空闲300周期。",
+          "pitfall": "把not_selected与long_scoreboard一并相加，声称总共损失了这些执行时间。",
+          "check": {
+            "question": "not_selected降低但时间变慢，可能发生了什么？",
+            "answer": "候选不足让scheduler出现无eligible空泡，减少竞争并不等于提高吞吐。"
+          },
+          "state": "eligible集合、被选中warp、采样窗口和issue-active。",
+          "transition": "每次选择后，其余当时eligible的warp保持就绪但被记为未选中状态。",
+          "prediction": "增加无依赖候选可能提高not_selected，同时保持或改善发射活跃度。",
+          "sourceIds": [
+            "H04-s2",
+            "H04-s4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "H05",
+      "kicker": "FOLLOW THE NEXT INSTRUCTION",
+      "question": "控制流改变后，下一条可发射的指令从哪里来？",
+      "summary": "连接PC、指令缓存、指令缓冲、活动mask与汇合；把分支、谓词化和ITS对性能与正确性的影响拆开。",
+      "scope": "CUDA语义与Volta前后差异分别说明。下图采用明确的post-dominator教学汇合模型，展示事件顺序，不声称复现现代GPU的内部调度器。",
+      "prerequisites": [
+        "H02：线程状态与active mask",
+        "H04：eligible需要指令供给和资源"
+      ],
+      "sources": [
+        {
+          "id": "H05-s1",
+          "title": "CUDA Programming Guide · SIMT / Independent Thread Scheduling",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#simt-execution-model",
+          "kind": "official",
+          "note": "2026-10-31更新，§3.2.2.1及其Independent Thread Scheduling小节：PC、active线程、发散与同步；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H05-s2",
+          "title": "CUDA Best Practices · Branching and Divergence / Branch Predication",
+          "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#control-flow",
+          "kind": "official",
+          "note": "CUDA13.5，§13.1–13.2：分支、谓词化及循环展开；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H05-s3",
+          "title": "Jia et al. · Instruction cache microbenchmark",
+          "url": "https://arxiv.org/pdf/1804.06826",
+          "kind": "paper",
+          "note": "2018，§3.5：改变独立FFMA序列体积测指令缓存层次；V100等指定设备的实验观察；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H05-s4",
+          "title": "Nsight Compute Profiling Guide · Warp Stall Reasons / Units",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "§2.4.7：no_instructions采样原因；§2.3.4：ICC/GCC等术语。不将采样直接解释为miss计数。；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H05-s5",
+          "title": "GPGPU-Sim · simt_stack::update",
+          "url": "https://github.com/accel-sim/gpgpu-sim_distribution/blob/4195dd4f229cbf03f4f38c49139ae94d01d23f03/src/abstract_hardware_model.cc",
+          "kind": "simulator",
+          "note": "已读commit4195dd4（2026-10-27）：按next_pc划分active mask，维护post-dominator reconvergence stack；不是Volta ITS电路实现；核对日期 2026-11-07。"
+        },
+        {
+          "id": "H05-s6",
+          "title": "GPGPU-Sim · scheduler_unit::cycle / instruction buffer",
+          "url": "https://github.com/accel-sim/gpgpu-sim_distribution/blob/4195dd4f229cbf03f4f38c49139ae94d01d23f03/src/gpgpu-sim/shader.cc#L1477",
+          "kind": "simulator",
+          "note": "已读commit4195dd4（2026-10-27）：ibuffer_empty、PC一致性、控制冒险flush及队首发射检查；核对日期 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "smsp__pcsamp_warps_issue_stalled_no_instructions",
+          "meaning": "PC采样显示等待取指选择或指令缓存缺失等情况；代码工作集扩大时可作为前端压力线索。",
+          "caveat": "名称为no_instructions复数。它不是I-cache miss计数，短kernel也可能偏高。",
+          "sourceId": "H05-s4"
+        },
+        {
+          "name": "SourceCounters / WarpStateStats",
+          "meaning": "将采样定位到SASS并查看线程参与分布，区分分支与谓词化。",
+          "caveat": "使用 ncu --list-sections核对标识；采样位置与原因不能独自还原控制流硬件。",
+          "sourceId": "H05-s4"
+        },
+        {
+          "name": "InstructionStats",
+          "meaning": "比较展开前后的动态指令组成，配合静态SASS体积判断前端与执行工作变化。",
+          "caveat": "动态指令数和静态代码字节数不是同一指标；同时检查寄存器和local memory。",
+          "sourceId": "H05-s4"
+        }
+      ],
+      "walkthrough": {
+        "title": "一次分支：路径推进与显式汇合模型",
+        "assumption": "32线程warp按lane<16分成两条路径。教学模型先执行A、再执行B，二者在J汇合；路径顺序是演示选择，不是硬件保证。A有2条、B有1条独立操作，忽略时延和缓存。",
+        "nodes": [
+          {
+            "id": "pc",
+            "label": "控制位置",
+            "kind": "state"
+          },
+          {
+            "id": "a",
+            "label": "路径 A",
+            "kind": "compute"
+          },
+          {
+            "id": "b",
+            "label": "路径 B",
+            "kind": "compute"
+          },
+          {
+            "id": "j",
+            "label": "汇合 J",
+            "kind": "state"
+          }
+        ],
+        "steps": [
+          {
+            "title": "分支前",
+            "explanation": "所有32个线程在同一逻辑位置；先形成各自条件。",
+            "active": [
+              "pc"
+            ],
+            "values": {
+              "pc": "branch；mask=全部",
+              "a": "未执行",
+              "b": "未执行",
+              "j": "等待两路径"
+            },
+            "edges": []
+          },
+          {
+            "title": "形成两个集合",
+            "explanation": "lane0–15进入A，lane16–31进入B。路径记录保留PC和mask。",
+            "active": [
+              "pc",
+              "a",
+              "b"
+            ],
+            "values": {
+              "pc": "两个后继PC",
+              "a": "mask=0–15",
+              "b": "mask=16–31",
+              "j": "尚未到达"
+            },
+            "edges": [
+              {
+                "from": "pc",
+                "to": "a",
+                "label": "lane0–15"
+              },
+              {
+                "from": "pc",
+                "to": "b",
+                "label": "lane16–31"
+              }
+            ]
+          },
+          {
+            "title": "先推进A",
+            "explanation": "A的两条指令只更新lane0–15；B组线程保留状态。",
+            "active": [
+              "a"
+            ],
+            "values": {
+              "pc": "A0 → A1",
+              "a": "2条已执行",
+              "b": "仍等待本路径",
+              "j": "A到达"
+            },
+            "edges": [
+              {
+                "from": "a",
+                "to": "j",
+                "label": "A路径完成"
+              }
+            ]
+          },
+          {
+            "title": "再推进B",
+            "explanation": "B的一条指令只更新lane16–31。这里不能把空出的A lane塞入别的warp。",
+            "active": [
+              "b"
+            ],
+            "values": {
+              "pc": "B0",
+              "a": "在J等待",
+              "b": "1条已执行",
+              "j": "A、B均到达"
+            },
+            "edges": [
+              {
+                "from": "b",
+                "to": "j",
+                "label": "B路径完成"
+              }
+            ]
+          },
+          {
+            "title": "模型在J合并集合",
+            "explanation": "教学汇合规则把两个集合重新组织为全部32线程。通信正确性仍需程序满足适当同步契约。",
+            "active": [
+              "j"
+            ],
+            "values": {
+              "pc": "J",
+              "a": "路径结束",
+              "b": "路径结束",
+              "j": "mask=全部"
+            },
+            "edges": [
+              {
+                "from": "a",
+                "to": "j",
+                "label": "合并集合"
+              },
+              {
+                "from": "b",
+                "to": "j",
+                "label": "合并集合"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：展开因子与控制路径（未执行）",
+        "change": "固定总工作量，扫描循环展开因子；另做warp一致条件与warp内交错条件的独立对照。",
+        "expect": "适度展开可能减少控制开销并提升ILP；过度展开可能增加代码和寄存器压力。交错条件可能降低每条指令有效线程数。",
+        "measure": "反汇编判断branch/predication，记录静态代码尺寸、动态指令、寄存器、local流量、no_instructions和普通耗时。",
+        "confounds": "编译器删除或化简循环、工作量变化、cache热状态、occupancy台阶及不合法同步。"
+      },
+      "atoms": [
+        {
+          "id": "H05.01",
+          "question": "下一条指令地址从哪里来，为什么有寄存器数据也可能发不了？",
+          "explain": [
+            "PC描述执行接下来需要的指令位置。普通顺序路径向后推进，分支、调用和返回则选择不同目标。调度器即使有resident warp和已经准备的算术输入，若下一条指令尚未取回或控制流目标尚未确定，也不能凭空发射它。",
+            "Volta以前共享warp PC加mask的执行模型，与Volta及之后的每线程执行状态不同；但都需要把合适线程组的控制位置转化为可发射指令。模拟器中PC与指令缓冲内容不匹配会触发flush，这展示了控制路径如何改变取指流，不等于声明真实GPU采用同样的缓冲实现。"
+          ],
+          "example": "教学指令序列A→B→C，B是条件分支。若条件选择D，已经按顺序准备的C不能作为该线程组的下一条有效指令直接执行。",
+          "pitfall": "认为只要ALU输入ready，就与取指和控制流无关。",
+          "check": {
+            "question": "分支没有数据访存，为什么仍可能导致发射间隙？",
+            "answer": "目标路径确定、取指和指令供给也需要推进；具体成本依架构和代码布局而定。"
+          },
+          "state": "线程/线程组PC、分支条件、目标地址与当前指令缓冲。",
+          "transition": "根据控制流更新PC，只有与当前合法路径匹配的指令才能进入发射候选。",
+          "prediction": "改变分支目标布局可能改变取指供给，即使算术操作数不变。",
+          "sourceIds": [
+            "H05-s1",
+            "H05-s5",
+            "H05-s6"
+          ]
+        },
+        {
+          "id": "H05.02",
+          "question": "instruction cache miss 与 data cache miss 是一回事吗？",
+          "explain": [
+            "指令缓存保存将要执行的机器码，而数据缓存保存load/store访问的数据。大体积展开代码、频繁跳转到分散代码区域可能增加取指工作集；即使所有数据都在寄存器里，指令供给仍可能成为瓶颈。代码体积与动态执行次数也不同：短循环可反复执行很多次。",
+            "论文用逐渐增长的独立指令序列探测不同设备的指令缓存转折点；这些容量与延迟不能跨代直接套用。NCU的no_instructions表示等待取指选择或指令cache miss等情况，并不是专门计数I-cache miss。必须结合代码体积、SASS布局和单变量对照来验证。"
+          ],
+          "example": "相同总FMA次数，一版用小循环反复执行，另一版完全展开为很长SASS。后者少了循环控制，但可能扩大取指工作集。",
+          "pitfall": "看到no_instructions偏高，就直接声称L1数据cache miss很多。",
+          "check": {
+            "question": "算术与数据访问完全一样，还可能有取指性能差异吗？",
+            "answer": "可能。SASS静态体积、跳转布局和前端供给方式仍可不同。"
+          },
+          "state": "PC访问序列、指令缓存工作集、miss返回与待取指warp。",
+          "transition": "所需机器码不可用时等待取回，返回后才能恢复相应指令供给。",
+          "prediction": "展开体积跨过某个缓存有效容量后，取指等待可能出现转折。",
+          "sourceIds": [
+            "H05-s3",
+            "H05-s4",
+            "H05-s6"
+          ]
+        },
+        {
+          "id": "H05.03",
+          "question": "instruction buffer 空了，与 instruction cache miss 有什么区别？",
+          "explain": [
+            "指令缓存是提供机器码的存储层次；指令缓冲则把已经取得并准备供给的指令暂存给执行前端。缓存命中不保证每个warp每个周期都有下一条指令可用，取指选择、解码供给、控制流改变以及有限缓冲都可能形成间隙。",
+            "所引GPGPU-Sim显式检查ibuffer_empty，因控制PC不符还会清空已准备内容。这是可读的前端模型，适合分离“代码存在于缓存”和“下一条指令已经进入可用缓冲”两种状态。真实硬件的缓冲深度与仲裁不可从一个NCU样本反推出精确数值。"
+          ],
+          "example": "教学W0的下一条代码已在指令cache里，但本轮前端先服务W1；W0缓冲尚空，仍不参与发射，稍后取指完成才能变成候选。",
+          "pitfall": "把no_instructions的全部样本都换算成指令缓存缺失次数。",
+          "check": {
+            "question": "缓存命中率100%是否足以证明前端从不限制发射？",
+            "answer": "不够。取指/解码带宽、服务顺序和buffer供给还可能限制。"
+          },
+          "state": "指令缓存可用性、每warp指令缓冲和前端服务机会。",
+          "transition": "取指/解码把合法路径指令放入缓冲；scheduler只消费已准备的下一条。",
+          "prediction": "提高缓存命中后若供给带宽仍不足，空缓冲现象可能保留。",
+          "sourceIds": [
+            "H05-s4",
+            "H05-s6"
+          ]
+        },
+        {
+          "id": "H05.04",
+          "question": "一半线程走 A、一半线程走 B，代价来自哪里？",
+          "explain": [
+            "同一warp在数据相关分支处分成不同控制路径时，各路径分别只激活对应线程。路径A执行时，选择B的线程不会代替A做另一条指令；所以有效lane利用可能下降。不同warp各自选择完整路径，则不构成同一warp内部的发散。",
+            "性能损失取决于两条路径的指令量、参与分布、重汇合方式及编译器是否改用predication。若只有少量线程走一条非常长的路径，它可能决定这个warp的总进展；但短分支的影响也可能被其他warp工作或管线资源掩盖。应看最终SASS而非仅看C++中的if。"
+          ],
+          "example": "路径A有8条指令、B有2条，16个lane走各自路径。在简化串行路径模型中，两套路径都需推进，而不是只支付平均5条warp指令。",
+          "pitfall": "把不同warp之间的分支差异称作warp内branch divergence。",
+          "check": {
+            "question": "所有32线程都走A，与16/16分开相比，哪种更容易保持满lane？",
+            "answer": "所有线程同一路径时更容易；但端到端速度还取决于该路径工作量与其他瓶颈。"
+          },
+          "state": "分支条件、各路径参与mask、路径动态指令数。",
+          "transition": "逐个推进合法路径，只更新该路径参与线程的状态。",
+          "prediction": "保持总标量工作时，warp内交错路径通常需要更多低参与度的warp指令。",
+          "sourceIds": [
+            "H05-s1",
+            "H05-s2"
+          ]
+        },
+        {
+          "id": "H05.05",
+          "question": "分支汇合是所有线程自动同时到达下一行吗？",
+          "explain": [
+            "汇合描述分离路径上的线程再次可以共同推进的执行组织。经典post-dominator模型保存路径PC、active mask与汇合点，待各条路径完成相应部分后合并集合。GPGPU-Sim的simt_stack::update是这种机制的可读示例。",
+            "这个模型不能直接当成Volta ITS的全部实现，源码的词法if结束位置也不自动提供线程间内存同步。算法若要交换shared memory数据，仍须使用满足参与条件的同步原语；需要所有指定lane共同参与的warp操作，也应遵守mask契约。将控制汇合与内存可见性分开非常重要。"
+          ],
+          "example": "A路径写shared[0]、B路径读shared[0]，仅因为两段C++在同一个if后汇合，不能为任意未同步的跨线程读写建立正确的先后关系。",
+          "pitfall": "把SIMT stack动画画成现代NVIDIA每线程调度的完整电路，或把汇合等同memory fence。",
+          "check": {
+            "question": "代码重新到达同一行，是否就能省略所需的__syncwarp？",
+            "answer": "不能。应以同步原语与CUDA内存模型的保证判断，而不是词法位置。"
+          },
+          "state": "各路径PC、参与mask、模型汇合点与必要的同步协议。",
+          "transition": "教学栈模型在路径到达汇合点时收回路径记录；程序可见的通信顺序仍由同步契约保证。",
+          "prediction": "控制流看似重新一致，不代表跨线程数据交换已被正确排序。",
+          "sourceIds": [
+            "H05-s1",
+            "H05-s2",
+            "H05-s5"
+          ]
+        },
+        {
+          "id": "H05.06",
+          "question": "predication 避免分支后，是否所有工作都免费消失了？",
+          "explain": [
+            "谓词化给指令附加每线程条件，控制哪些线程真正读操作数、计算地址并写结果。短条件块可能被编译器转为一串predicated指令，从而不走真正的分支路径切换；但这些指令仍会进入调度，因此并非零发射成本。",
+            "它常在少量操作时避免控制流开销，却可能对很长或昂贵的条件块浪费指令供给和发射机会。应分别观察active线程与pred-on线程，检查SASS里是否真的存在分支。不能把每个带if的源码片段都算作一次动态发散，也不能把所有predicated-off线程按正常load算流量。"
+          ],
+          "example": "一条@P0 store仅有8个lane谓词为真：关闭的lane不应产生对应地址求值和写入，但这条warp指令本身仍占用调度过程。",
+          "pitfall": "认为predicate=false的线程仍会发出相同的内存访问，或反过来认为整条指令完全没有成本。",
+          "check": {
+            "question": "有if却没有branch SASS，为什么仍可能有效线程比低？",
+            "answer": "编译器可能谓词化了条件块，很多线程在这些指令上pred-off。"
+          },
+          "state": "活动集合、每lane谓词、predicated指令序列和副作用。",
+          "transition": "对active且predicate=true的线程执行可见效果；假谓词不等于整条warp指令未被调度。",
+          "prediction": "条件块变长后，谓词化的动态发射成本可能逐渐超过分支方案。",
+          "sourceIds": [
+            "H05-s1",
+            "H05-s2",
+            "H05-s4"
+          ]
+        },
+        {
+          "id": "H05.07",
+          "question": "Independent Thread Scheduling 改变了哪些假设，又没有改变什么？",
+          "explain": [
+            "Volta及之后维护每线程执行状态，可在子warp粒度分歧、等待和重新组合，这使某些线程间协作模式更灵活。它打破的是“同warp线程在每一条指令上天然锁步”的旧假设，尤其影响未显式同步的shared memory交换和warp collective参与集合。",
+            "它没有把每个线程变成拥有独立发射器的CPU核，也没有取消32线程warp及共同指令执行的性能意义。代码仍应明确通信协议，使用*_sync intrinsics和合适mask，并通过racecheck/synccheck等工具检查错误。不要把某次观察到的线程推进顺序当作正确性保证。"
+          ],
+          "example": "旧代码让lane0先写shared、lane1紧接着读，并仅依靠“同warp自然同时走”。在ITS下应显式建立同步与可见性，而不是赌编译和调度。",
+          "pitfall": "认为ITS完全消除了分支发散代价，或任意warp内通信都不再需要同步。",
+          "check": {
+            "question": "ITS是否允许忽略__shfl_sync中的参与mask？",
+            "answer": "不允许。线程状态更灵活反而要求更明确地遵守参与和同步契约。"
+          },
+          "state": "每线程PC/调用状态、逻辑warp身份和显式协作mask。",
+          "transition": "调度组织同warp内适合共同执行的线程；等待与汇合可在子warp粒度发生。",
+          "prediction": "依赖隐式锁步的程序可能不再可靠，显式合法同步应保持正确性。",
+          "sourceIds": [
+            "H05-s1",
+            "H05-s2"
+          ]
+        },
+        {
+          "id": "H05.08",
+          "question": "循环展开为什么可能先变快，再变慢？",
+          "explain": [
+            "展开减少循环控制，也可能暴露更多独立指令供编译器交错安排。但它同时增加静态SASS体积和活跃值数量，可能带来更大指令缓存工作集、更高寄存器占用、spill或occupancy下降。这些变化之间存在竞争。",
+            "因此扫描展开因子时要记录至少三条曲线：实际耗时、生成代码与寄存器资源、取指及依赖相关观测。拐点不必只有一种原因；若寄存器数恰好跨台阶，应先排查驻留变化；若资源不变而代码体积增大后no_instructions上升，才更支持取指压力假设。"
+          ],
+          "example": "把展开因子从1、2、4、8逐步提高，保持总迭代次数相同。若8时spill出现，性能回落不能只归咎于I-cache。",
+          "pitfall": "把#pragma unroll视为总是提升性能的开关，或一次改变展开与block大小后只归因于展开。",
+          "check": {
+            "question": "怎样区分I-cache问题和register spill问题？",
+            "answer": "检查SASS代码体积、寄存器报告、local load/store与取指采样，并做保持其中一项稳定的对照。"
+          },
+          "state": "展开因子、总工作量、静态指令体积和寄存器活跃区间。",
+          "transition": "编译器复制循环体并重排；收益与代码/资源代价同时进入生成结果。",
+          "prediction": "适度展开可能改善ILP，过度展开则可能因前端或资源压力反转收益。",
+          "sourceIds": [
+            "H05-s2",
+            "H05-s3",
+            "H05-s4",
+            "H05-s6"
+          ]
+        }
+      ]
+    }
+  ]
+}

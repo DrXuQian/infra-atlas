@@ -1,0 +1,1831 @@
+{
+  "modules": [
+    {
+      "id": "H06",
+      "kicker": "DEPENDENCIES · BEFORE ISSUE",
+      "question": "寄存器名已经出现，为什么下一条指令还不能发射？",
+      "summary": "把数据相关、依赖跟踪与指令控制信息分开：正确性决定什么必须等待，实现决定怎样等待。",
+      "scope": "先用每个 warp 顺序发射、结果完成后可用的教学模型分析 RAW/WAW。SASS 控制信息以 Jia 等的 Volta 逆向观察为例，不能视为跨代公开 ISA。NCU 分类来自工具文档。",
+      "prerequisites": [
+        "H01",
+        "H04",
+        "H05"
+      ],
+      "sources": [
+        {
+          "id": "H06-s1",
+          "title": "Accel-Sim：Scoreboard::checkCollision / reserveRegisters / releaseRegisters",
+          "url": "https://github.com/accel-sim/gpgpu-sim_distribution/blob/4195dd4f229cbf03f4f38c49139ae94d01d23f03/src/gpgpu-sim/scoreboard.cc",
+          "kind": "simulator",
+          "note": "源码模型；核对于 2026-11-07，commit 4195dd4f，blob b52441b85f09e3f59b3b376cc8fbe7f079d21eaa。检查输入/输出与 pending 集合的交集，不代表真实芯片电路。"
+        },
+        {
+          "id": "H06-s2",
+          "title": "Jia et al., Dissecting the NVIDIA Volta GPU Architecture, §2.1",
+          "url": "https://arxiv.org/pdf/1804.06826#page=13",
+          "kind": "paper",
+          "note": "论文逆向观察；2018 年 V100/Volta 的 SASS 控制字段。本文只抽取依赖控制的解释框架，不把字段数、位值或周期代价推广到新架构。核对于 2026-11-07。"
+        },
+        {
+          "id": "H06-s3",
+          "title": "Nsight Compute：Warp Stall Reasons",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/#warp-stall-reasons",
+          "kind": "official",
+          "note": "官方观测定义；固定执行依赖、L1TEX 依赖与 MIO 依赖的采样分类。硬件/工具版本决定可采指标，核对于 2026-11-07。"
+        },
+        {
+          "id": "H06-s4",
+          "title": "CUDA Binary Utilities：反汇编与原始编码",
+          "url": "https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html#nvdisasm",
+          "kind": "official",
+          "note": "官方工具；支持查看 cubin 指令与资源信息，但反汇编输出本身不是完整硬件时序规范。核对于 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "smsp__pcsamp_warps_issue_stalled_wait",
+          "meaning": "SMSP 上被采样 warp 的固定延迟执行依赖等待。独立计算填充依赖间隔后，等待占比可能下降。",
+          "caveat": "这是 PC 采样计数，不是全 SM 丢失周期；需同时检查 SASS、issue 活跃度与总时间。先用 ncu --query-metrics 核对。",
+          "sourceId": "H06-s3"
+        },
+        {
+          "name": "smsp__pcsamp_warps_issue_stalled_long_scoreboard",
+          "meaning": "等待 L1TEX 路径操作的结果；样本通常归在消费该结果的指令上。",
+          "caveat": "不是“所有长延迟指令”，也不能单凭它证明 HBM 带宽饱和。",
+          "sourceId": "H06-s3"
+        },
+        {
+          "name": "smsp__pcsamp_warps_issue_stalled_short_scoreboard",
+          "meaning": "等待非 L1TEX 的 MIO 操作结果，可涉及 shared、特殊数学或动态分支。",
+          "caveat": "不能直接解释成 shared bank conflict；需结合对应源指令和 Memory Workload Analysis。",
+          "sourceId": "H06-s3"
+        }
+      ],
+      "walkthrough": {
+        "title": "一个 RAW 依赖何时解除",
+        "assumption": "教学时序：单 warp、每周期最多发射一条、先处理完成再判断发射；A 在 c0 发射，延迟 L=3，c3 开始可被消费。未建模 RF 和队列。",
+        "nodes": [
+          {
+            "id": "producer",
+            "label": "A：写 R4",
+            "kind": "compute"
+          },
+          {
+            "id": "pending",
+            "label": "待写集合",
+            "kind": "state"
+          },
+          {
+            "id": "consumer",
+            "label": "B：读 R4",
+            "kind": "compute"
+          },
+          {
+            "id": "reg",
+            "label": "R4 的值",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "c0：生产者发射",
+            "explanation": "A 被接收，R4 标记为待写；旧值不能当成 A 的结果。",
+            "active": [
+              "producer",
+              "pending"
+            ],
+            "values": {
+              "producer": "已发射",
+              "pending": "{R4}",
+              "consumer": "未发射",
+              "reg": "旧值"
+            },
+            "edges": [
+              {
+                "to": "pending",
+                "label": "预留 R4",
+                "from": "producer"
+              }
+            ]
+          },
+          {
+            "title": "c1：检查消费指令",
+            "explanation": "B 的输入集合包含 R4，与待写集合相交，产生 RAW 阻塞。",
+            "active": [
+              "pending",
+              "consumer"
+            ],
+            "values": {
+              "producer": "在途",
+              "pending": "{R4}",
+              "consumer": "等待 RAW",
+              "reg": "旧值"
+            },
+            "edges": [
+              {
+                "to": "consumer",
+                "label": "阻止提前消费",
+                "from": "pending"
+              }
+            ]
+          },
+          {
+            "title": "c2：还有一个周期",
+            "explanation": "即使执行入口空闲，B 仍不能读取未完成的结果；资源空闲不等于数据可用。",
+            "active": [
+              "consumer"
+            ],
+            "values": {
+              "producer": "在途",
+              "pending": "{R4}",
+              "consumer": "继续等待",
+              "reg": "旧值"
+            },
+            "edges": []
+          },
+          {
+            "title": "c3：先完成，再选择",
+            "explanation": "A 完成，更新 R4 并释放预留；B 此时才满足该数据条件。",
+            "active": [
+              "reg",
+              "pending"
+            ],
+            "values": {
+              "producer": "完成",
+              "pending": "∅",
+              "consumer": "数据已就绪",
+              "reg": "A 的新值"
+            },
+            "edges": [
+              {
+                "to": "reg",
+                "label": "结果写入",
+                "from": "producer"
+              }
+            ]
+          },
+          {
+            "title": "c3：消费指令发射",
+            "explanation": "假定其他条件也满足，B 在本周期读取新值并发射。解除依赖与赢得仲裁是两个条件。",
+            "active": [
+              "consumer"
+            ],
+            "values": {
+              "producer": "完成",
+              "pending": "∅",
+              "consumer": "已发射",
+              "reg": "A 的新值"
+            },
+            "edges": [
+              {
+                "to": "consumer",
+                "label": "消费新值",
+                "from": "reg"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：依赖链与独立链对照（尚未执行）",
+        "change": "编写同等数量的 FP32 FMA：版本 A 只更新一个累加器，版本 B 在程序顺序中轮换多个独立累加器。",
+        "expect": "若主要瓶颈是固定执行依赖，B 可增加可发射指令；达到管线吞吐上限后，继续增加独立链不再等比例提速。",
+        "measure": "先反汇编确认链结构与指令数量，再记录时间、寄存器占用、NCU wait 采样和对应 pipeline 吞吐；对具体 GPU 执行 ncu --query-metrics 与 ncu --list-sections。",
+        "confounds": "更多累加器增加寄存器需求，可能改变 occupancy；编译器可重排或消除计算；测量时固定工作量并保留最终输出。"
+      },
+      "atoms": [
+        {
+          "id": "H06.01",
+          "question": "RAW 为什么是“等正确版本的数据”？",
+          "explain": [
+            "RAW（read after write）表示后面的指令要读取前面指令产生的值。依赖不来自两个操作时间接近，而来自它们使用同一个数据版本。只要生产者结果尚不可用，消费者即使获得计算单元，也不能拿寄存器里的旧值继续执行。",
+            "在教学 scoreboard 中，发射生产者时预留目标寄存器；检查后续指令时，将其源寄存器与待写集合求交。相交就等待，不相交只说明通过这一道检查，还需要取指、资源及仲裁条件。真实 SASS 可以通过不同控制机制表达相同正确性约束。"
+          ],
+          "example": "A：R4=load[p]；B：R8=R4+1。A 已发射不代表 R4 已更新，B 必须等返回后的新值。",
+          "pitfall": "把 RAW 等同于 long_scoreboard；依赖类别还取决于生产者所在路径。",
+          "check": {
+            "question": "A 的目标是 R4，B 只读 R7，B 一定能立即发射吗？",
+            "answer": "不一定；只排除了这条 RAW，还可能有其他依赖或资源限制。"
+          },
+          "sourceIds": [
+            "H06-s1",
+            "H06-s3"
+          ],
+          "state": "生产者目标、消费者源、待写寄存器集合。",
+          "transition": "目标预留后，消费者只有在完成事件释放目标后才通过 RAW 检查。",
+          "prediction": "把独立指令放在消费指令之前，可能利用等待窗口。"
+        },
+        {
+          "id": "H06.02",
+          "question": "顺序发射为什么仍要处理 WAW？",
+          "explain": [
+            "WAW（write after write）发生于两条指令写同一寄存器，而程序要求最终保留后面那次写入。顺序发射并不自动保证顺序完成：如果早发射的操作很慢，晚发射的操作很快，前者可能在后者之后覆盖寄存器，破坏结果。",
+            "Accel-Sim 的这一 scoreboard 模型把候选指令的输出也纳入冲突检查：目标已被未完成指令预留时，不允许再次预留。它用等待保持写入顺序，而不是在这里模拟 CPU 式寄存器重命名。真实芯片是否以及怎样消除名字相关，需要独立证据。"
+          ],
+          "example": "A：慢 load 写 R2；B：把常量写 R2。若 B 先完成、A 后覆盖，最终 R2 会错误地变成 load 的值。",
+          "pitfall": "认为只要没有读旧值，就可以忽略两次写入顺序。",
+          "check": {
+            "question": "把 B 的目标改成 R3，消除的是哪类约束？",
+            "answer": "消除了 R2 上的 WAW；不自动消除 B 的输入依赖。"
+          },
+          "sourceIds": [
+            "H06-s1"
+          ],
+          "state": "两条指令的目标寄存器及各自完成时刻。",
+          "transition": "若候选目标与待写集合相交，该模型阻止第二次写的发射。",
+          "prediction": "将互不相关的输出分配到不同名字，可减少名字冲突，但可能增加寄存器数。"
+        },
+        {
+          "id": "H06.03",
+          "question": "WAR 风险取决于发射顺序，还是实际读数时刻？",
+          "explain": [
+            "WAR（write after read）要求后面的写不能破坏前面尚未取得的输入。关键事件是“操作数已被安全读取或保存”，不是仅看指令是否发射。若一个较早操作在后续阶段才使用寄存器内容，那么之后过早覆写就可能改变它原本应该读到的数据。",
+            "所引用的模拟器 scoreboard 注释明确不在该处处理 WAR，并以顺序发射解释模型假设；不能据此断言 NVIDIA 没有 WAR 控制。Volta 逆向论文描述了读依赖 barrier，用于保护某些操作所需输入，直到可以安全覆写。这与等待结果的 RAW 是不同方向。"
+          ],
+          "example": "store [p]=R6 已发射，但假设尚未锁存 R6；接着 R6=0。若不保护读者，存出的可能是 0 而非原值。",
+          "pitfall": "把“前一条已经发射”当作“所有输入都已读取完成”。",
+          "check": {
+            "question": "如果 store 已把 R6 完整锁存到内部缓冲，后写还威胁这次读吗？",
+            "answer": "就该输入的 WAR 而言不再威胁，但内存顺序仍是另一件事。"
+          },
+          "sourceIds": [
+            "H06-s1",
+            "H06-s2"
+          ],
+          "state": "输入寄存器、读操作的锁存状态、后续覆盖操作。",
+          "transition": "当输入仍会被读取时阻止覆盖；锁存或读取完成后才能释放保护。",
+          "prediction": "保持输入版本独立，比仅调整发射间隔更容易明确正确性。"
+        },
+        {
+          "id": "H06.04",
+          "question": "scoreboard 的预留和释放分别对应什么？",
+          "explain": [
+            "在已核对的源码里，每个 warp 有一个待写寄存器集合。reserveRegisters 遍历指令输出并插入，releaseRegisters 遍历输出并删除；checkCollision 则查询下一条指令使用的输入、输出、谓词及地址相关寄存器是否碰到这些项。集合表达的是尚未完成的写责任。",
+            "这个最小模型便于把等待原因画出来：寄存器存在于集合中，表示不能消费或再次写入；集合为空不表示 warp 必然能发射。还要沿 shader 的调用路径确认何时预留、何时释放，以及访存返回如何触发完成，不能仅凭函数名把释放时刻想成固定周期。"
+          ],
+          "example": "W0 的集合是 {R4}，W1 的集合为空；两个 warp 都有名为 R4 的寄存器，但不是同一份线程状态。",
+          "pitfall": "把每 warp 的寄存器名集合当作整个 SM 的全局名字表。",
+          "check": {
+            "question": "为什么 W0 写 R4 不应直接阻止 W1 读自己的 R4？",
+            "answer": "寄存器状态按 warp/线程上下文区分，名字相同不等于存储对象相同。"
+          },
+          "sourceIds": [
+            "H06-s1"
+          ],
+          "state": "按 warp 索引的 pending 集合和候选指令寄存器集合。",
+          "transition": "预留加入、完成删除；交集非空则该候选不能越过依赖检查。",
+          "prediction": "打印每次集合变化，可以定位漏释放、提前消费或重复预留。"
+        },
+        {
+          "id": "H06.05",
+          "question": "固定延迟的等待为什么可以写进指令控制信息？",
+          "explain": [
+            "如果某类操作在指定条件下有已知的依赖间隔，编译器就能把消费者排到足够晚的位置，或使用机器指令控制信息保留必要间隔。这样做解决的是何时允许依赖指令继续，而不是声明运算单元在这段时间不能接收其他独立工作。",
+            "Volta 的逆向研究讨论了 SASS stall 控制字段；这里把它作为静态时序约束的例子，而不把具体位宽、数值与新架构对应。验证时要查看针对目标 SM 生成的最终 SASS、独立指令位置和正确性。CUDA 源码中的两行相邻，不保证机器码中也相邻。"
+          ],
+          "example": "教学模型中 FMA 在 c0 发射、c4 可用；消费者不能在 c3 使用结果，但 c1-c3 可以安排其他允许发射的独立工作。",
+          "pitfall": "把“依赖间隔 4 周期”误读成“整条流水线每 4 周期才能接一条”。",
+          "check": {
+            "question": "独立 FMA 能在前一条尚未完成时开始吗？",
+            "answer": "可以，前提是发射和管线接收能力允许。"
+          },
+          "sourceIds": [
+            "H06-s2",
+            "H06-s3",
+            "H06-s4"
+          ],
+          "state": "生产者完成时刻、下一条允许发射时刻、独立指令位置。",
+          "transition": "静态间隔必须覆盖依赖所需时间；中间独立操作并不消费未就绪值。",
+          "prediction": "同等 FMA 数量下，多条独立链通常比单链更能暴露吞吐能力。"
+        },
+        {
+          "id": "H06.06",
+          "question": "可变延迟为什么不能只靠一个固定等待数？",
+          "explain": [
+            "load 的完成时间可能随缓存命中、队列压力和数据路径变化。固定等得太短会读错，按最坏情况固定等又会浪费常见情况。因此实现需要某种完成跟踪，让后续消费者依赖“结果实际就绪”这个事件，而不只依赖时间流逝。",
+            "Volta 逆向论文把相关 SASS 信息解释为依赖 barrier：生产操作关联跟踪项，后续指令声明等待关系。这里的 barrier 属于指令依赖控制，不等于 __syncthreads 的线程集合 rendezvous，也不是自动提供跨线程内存发布的 fence。三者不能互换名称和语义。"
+          ],
+          "example": "同一 load 在一次实验中命中 L1，在另一次中走到下层；消费者都必须正确，但允许开始的时刻可以不同。",
+          "pitfall": "把 SASS dependency barrier 当成 CTA 同步屏障，推导出其他 warp 也已到达。",
+          "check": {
+            "question": "结果未到但已经等过一个经验平均延迟，可以开始消费吗？",
+            "answer": "不可以，平均延迟不是本次操作的完成证明。"
+          },
+          "sourceIds": [
+            "H06-s2",
+            "H06-s3"
+          ],
+          "state": "跟踪项、在途生产操作、等待该项的消费者。",
+          "transition": "生产操作完成才解除对应依赖，消费者不能靠平均时间猜测。",
+          "prediction": "增加数据就绪前的独立工作，可能隐藏部分可变等待。"
+        },
+        {
+          "id": "H06.07",
+          "question": "wait mask 为什么是集合，而不是单个生产者编号？",
+          "explain": [
+            "一条消费者可能同时需要多份结果，例如地址来自一个 load，而乘数来自另一个 load。若只有一个等待编号，就不能表达“这两个依赖都已满足”。位掩码是一种紧凑集合：每个位对应一个被跟踪的条件，消费者要求其选择的条件全部解除。",
+            "在教学模型中，pending mask 代表仍未完成的生产者，wait mask 代表消费者真正需要的生产者；两者按位与为零，才通过这项检查。这个模型解释集合关系，不承诺真实机器使用相同位数、分配策略或复用规则。屏障编号复用也不能提前让旧依赖失去身份。"
+          ],
+          "example": "pending=0110，消费者 wait=0010 时仍等待；当第 1 位清除后，即使第 2 位尚未完成，这个消费者也可通过。",
+          "pitfall": "认为一个被跟踪操作完成就释放所有等待，或把 mask 当成单个整数编号。",
+          "check": {
+            "question": "wait=0101 时，只清除位 0 够吗？",
+            "answer": "不够，只要位 2 仍 pending，交集就不为零。"
+          },
+          "sourceIds": [
+            "H06-s2"
+          ],
+          "state": "pending 位集与每条消费者的 wait 位集。",
+          "transition": "仅当 pending & wait = 0 才通过这项依赖检查。",
+          "prediction": "等待集合越精确，不相关的长操作越不容易拖住消费者。"
+        },
+        {
+          "id": "H06.08",
+          "question": "yield 信息是在保证换 warp 吗？",
+          "explain": [
+            "yield 控制信息影响调度倾向，但不能替代候选 warp 的就绪条件。另一个 warp 如果在等数据、同步或执行入口，即使当前指令提示让出，调度器也不能凭空制造一个可发射候选。因此，应把“偏好谁”与“谁有资格”分成两层分析。",
+            "Volta 逆向论文报告了 yield 与后续发射选择、操作数复用之间的关系。这属于特定二进制和微架构观察，不是 CUDA 程序可依赖的公平性协议。不要用它实现跨 warp 同步，也不要根据单个字段推断一个跨代固定的切换周期或通用调度策略。"
+          ],
+          "example": "候选集合只有 W0 时，让出提示无法使正在等 load 的 W1 提前执行；有 W0/W1 两个候选时才出现选择空间。",
+          "pitfall": "把 yield 解释为强制公平调度，进而假设某个自旋 warp 必定及时得到运行。",
+          "check": {
+            "question": "yield 能解除另一个 warp 的 RAW 依赖吗？",
+            "answer": "不能。它影响选择倾向，不能改变数据是否就绪。"
+          },
+          "sourceIds": [
+            "H06-s2"
+          ],
+          "state": "可发射候选集合、当前 warp、调度控制提示。",
+          "transition": "先筛选合法候选，再讨论提示对选择的影响。",
+          "prediction": "当没有其他候选时，修改选择偏好很可能没有收益。"
+        },
+        {
+          "id": "H06.09",
+          "question": "wait、long_scoreboard、short_scoreboard 应如何区分？",
+          "explain": [
+            "先找到采样落在哪条 SASS，再沿数据来源寻找生产者。wait 对应固定延迟执行依赖；long_scoreboard 关联 L1TEX 路径结果；short_scoreboard 关联非 L1TEX 的 MIO 结果。名称中的 long/short 是工具分类，不是本次等待时间超过某阈值的判断。",
+            "同样的“下一条用不到数据”，可能由不同路径造成；相反，同一类别下也可能有不同根因。PC 样本不是全芯片统一停工时长，其他 warp 仍可能填满发射槽。优化应同时检查 issue 活跃度、相关管线或访存表现及端到端时间，而非只追求某项占比归零。"
+          ],
+          "example": "ADD 消费 global load 的 R4 时出现 long_scoreboard，热点可能显示在 ADD；问题源头却可能是前面的访存模式。",
+          "pitfall": "看到 short_scoreboard 就认定 bank conflict，看到 long_scoreboard 就认定 DRAM 带宽满。",
+          "check": {
+            "question": "等待样本减少但运行时间不变，可能正常吗？",
+            "answer": "正常；原先等待可能已被其他 warp 隐藏，或瓶颈位于别处。"
+          },
+          "sourceIds": [
+            "H06-s3"
+          ],
+          "state": "消费者 PC、生产者路径、采样类别及同期 issue 活跃度。",
+          "transition": "从消费位置反向追溯生产者，再用路径计数器检验具体假设。",
+          "prediction": "只有等待阻碍有效发射或关键路径时，减少它才更可能带来加速。"
+        }
+      ]
+    },
+    {
+      "id": "H07",
+      "kicker": "OPERANDS · FROM NAMES TO PORTS",
+      "question": "数据已经 ready，为什么算术单元仍可能吃不饱？",
+      "summary": "依赖就绪只是第一步；操作数还要穿过寄存器读取、端口仲裁和结果写回路径。",
+      "scope": "RF 读取与 collector 采用明确的教学资源模型，并以 Accel-Sim 实现对照。真实 RF bank/端口/旁路取决于架构；Volta 微基准观察只在对应实验范围内引用。",
+      "prerequisites": [
+        "H03",
+        "H06"
+      ],
+      "sources": [
+        {
+          "id": "H07-s1",
+          "title": "Accel-Sim：register_bank 与 opndcoll_rfu_t",
+          "url": "https://github.com/accel-sim/gpgpu-sim_distribution/blob/4195dd4f229cbf03f4f38c49139ae94d01d23f03/src/gpgpu-sim/shader.cc",
+          "kind": "simulator",
+          "note": "源码模型；核对于 2026-11-07，commit 4195dd4f，blob 96656943d56fa66af6a5c5d60d0797995fc86e23。关注 allocate_reads、collector_unit_t::ready、dispatch、writeback；不等同于 NVIDIA 实际电路。"
+        },
+        {
+          "id": "H07-s2",
+          "title": "Jia et al., Volta 微基准：§1、§2.1、§3.5",
+          "url": "https://arxiv.org/pdf/1804.06826#page=8",
+          "kind": "paper",
+          "note": "论文逆向观察；寄存器分配及 operand reuse 可以影响特定 V100 指令序列。本文不把论文 bank 几何当作 Hopper/Blackwell 通用事实。核对于 2026-11-07。"
+        },
+        {
+          "id": "H07-s3",
+          "title": "Nsight Compute：指标与 Source Counters",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/#metrics-reference",
+          "kind": "official",
+          "note": "官方观测方法；源级指令、执行路径和采样可帮助排除替代原因，没有从这些指标直接还原 RF 电路的保证。核对于 2026-11-07。"
+        },
+        {
+          "id": "H07-s4",
+          "title": "CUDA Binary Utilities：Resource usage 与反汇编",
+          "url": "https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html#resource-usage",
+          "kind": "official",
+          "note": "官方工具；查看最终寄存器分配与机器指令，而不是根据 C++ 变量数量猜测。核对于 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "InstructionStats（section）",
+          "meaning": "对照目标版本的指令类别与执行数量，先确认两组 RF 实验没有改变指令混合。",
+          "caveat": "section 不是 RF bank conflict 计数器；先执行 ncu --list-sections，最终 SASS 仍是必要证据。",
+          "sourceId": "H07-s3"
+        },
+        {
+          "name": "SourceCounters（section）",
+          "meaning": "把观察到的等待与源指令关联，再结合寄存器分配、operand reuse 标记和最小对照。",
+          "caveat": "不能把 dispatch 或 scoreboard 等待自动归因于 RF；需要排除依赖、管线和 occupancy 变化。",
+          "sourceId": "H07-s3"
+        }
+      ],
+      "walkthrough": {
+        "title": "收齐三个操作数，再送入执行管线",
+        "assumption": "原创教学模型：两个 bank，每 bank 每周期最多读一个不同寄存器；A 需要 R0/R2/R1，映射 bank=寄存器号 mod 2；忽略 reuse、写端口和真实 RF 拓扑。",
+        "nodes": [
+          {
+            "id": "b0",
+            "label": "Bank 0",
+            "kind": "data"
+          },
+          {
+            "id": "b1",
+            "label": "Bank 1",
+            "kind": "data"
+          },
+          {
+            "id": "collector",
+            "label": "A 的操作数",
+            "kind": "state"
+          },
+          {
+            "id": "pipe",
+            "label": "执行入口",
+            "kind": "compute"
+          }
+        ],
+        "steps": [
+          {
+            "title": "初始：寄存器都 ready",
+            "explanation": "R0 与 R2 同 bank。没有 RAW，也不代表能在一个周期同时取到全部三个操作数。",
+            "active": [
+              "b0",
+              "b1"
+            ],
+            "values": {
+              "b0": "R0、R2",
+              "b1": "R1",
+              "collector": "缺 3 项",
+              "pipe": "空闲"
+            },
+            "edges": []
+          },
+          {
+            "title": "第 1 次读取",
+            "explanation": "Bank 0 读 R0，Bank 1 读 R1。collector 保留已取得的数据，R2 继续排队。",
+            "active": [
+              "b0",
+              "b1",
+              "collector"
+            ],
+            "values": {
+              "b0": "读 R0",
+              "b1": "读 R1",
+              "collector": "已有 R0/R1",
+              "pipe": "尚未接收"
+            },
+            "edges": [
+              {
+                "to": "collector",
+                "label": "R0",
+                "from": "b0"
+              },
+              {
+                "to": "collector",
+                "label": "R1",
+                "from": "b1"
+              }
+            ]
+          },
+          {
+            "title": "第 2 次读取",
+            "explanation": "Bank 0 读 R2；这次不需要重读 R0/R1，缺失集合变为空。",
+            "active": [
+              "b0",
+              "collector"
+            ],
+            "values": {
+              "b0": "读 R2",
+              "b1": "空闲",
+              "collector": "全部收齐",
+              "pipe": "可接收"
+            },
+            "edges": [
+              {
+                "to": "collector",
+                "label": "R2",
+                "from": "b0"
+              }
+            ]
+          },
+          {
+            "title": "派发到管线",
+            "explanation": "只有操作数齐全且输出入口可用，collector 才能释放位置并派发。",
+            "active": [
+              "collector",
+              "pipe"
+            ],
+            "values": {
+              "b0": "空闲",
+              "b1": "空闲",
+              "collector": "已释放",
+              "pipe": "执行 A"
+            },
+            "edges": [
+              {
+                "to": "pipe",
+                "label": "三份操作数",
+                "from": "collector"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：将依赖瓶颈与操作数路径瓶颈分开（尚未执行）",
+        "change": "先在模拟器中固定指令流，仅改变 RF bank 数或 collector 配置；再在真实设备上比较经反汇编确认的寄存器分配/复用差异。",
+        "expect": "教学模型中，同 bank 读取需求超过端口供给时会增加收集轮次；真实硬件需要独立验证，不沿用模型周期数。",
+        "measure": "记录模型读仲裁与派发轨迹；硬件侧记录 SASS、寄存器数、指令混合、时间和 SourceCounters。",
+        "confounds": "重新编译会改变调度、reuse、寄存器占用和 occupancy；没有公开直接指标时，应保留“符合 RF 压力假设”的表述。"
+      },
+      "atoms": [
+        {
+          "id": "H07.01",
+          "question": "同名 R8 在不同线程里是同一份寄存器吗？",
+          "explain": [
+            "程序中的寄存器名属于线程执行上下文。一个 warp 的指令写 R8，通常代表参与线程各自更新自己的值；不能把它画成 32 个线程轮流修改一个共享标量。编译器把变量的活跃区间映射到有限寄存器名字，同一名字在不同时间还可能承载不同变量。",
+            "物理 RF 必须容纳驻留上下文，并提供读取和写回带宽，但公开 ISA 的逻辑编号不完整描述 bank、物理地址或重命名方式。分析资源时用最终 cubin 的寄存器使用情况，分析数据相关时用实际指令输入输出；这两种视图分别回答容量与依赖问题。"
+          ],
+          "example": "lane 0 的 R8=3，lane 1 的 R8=9；执行 R9=R8+1 后，它们得到 4 和 10，并没有共享写冲突。",
+          "pitfall": "按 CUDA 变量数估算真实 RF 容量，或把相同 SASS 名字当跨线程共享地址。",
+          "check": {
+            "question": "一个临时变量结束后，编译器能让新变量复用其寄存器名吗？",
+            "answer": "可以，只要活跃区间和依赖关系允许，最终分配也可能受其他约束影响。"
+          },
+          "sourceIds": [
+            "H07-s1",
+            "H07-s4"
+          ],
+          "state": "线程上下文、逻辑寄存器号、变量活跃区间。",
+          "transition": "编译器分配名字，机器指令在各线程上下文中读写相应值。",
+          "prediction": "延长变量生命周期可能增加最终寄存器数，即使源代码变量总数没变。"
+        },
+        {
+          "id": "H07.02",
+          "question": "为什么 RF 要区分容量和 bank 供给能力？",
+          "explain": [
+            "容量回答能保存多少值，bank 和端口回答一个时间片里能取出多少值。即使 RF 还有大量空闲空间，同时读取的请求若集中在有限 bank，仍可能超过供给能力。反过来，bank 利用均匀也不能解决寄存器总量限制驻留的问题。",
+            "Accel-Sim 的 register_bank 函数提供一个显式可检查的映射，并在 sub_core_model 下把 bank 范围分配给 scheduler。它适合研究分区带来的资源边界，却不证明真实 GPU 使用相同取模映射。讨论具体芯片时，应使用对应代际文档与可复现微基准。"
+          ],
+          "example": "教学模型有 4 个 bank、每个 1 读/周期。总容量翻倍但 bank/端口不变，单周期最多可服务的不同读取并不因此翻倍。",
+          "pitfall": "用“寄存器很多”推出读带宽足够，或把 shared 的 32-bank 规则套给 RF。",
+          "check": {
+            "question": "增加 bank 数一定增加 occupancy 吗？",
+            "answer": "不一定；occupancy 取决于分配容量及其他资源上限，bank 数主要关联访问并行性。"
+          },
+          "sourceIds": [
+            "H07-s1",
+            "H07-s2"
+          ],
+          "state": "RF 容量、bank 映射、每 bank 可服务请求数。",
+          "transition": "先映射请求，再在各 bank 内受端口供给限制进行服务。",
+          "prediction": "相同寄存器用量的两个版本仍可能表现出不同操作数访问压力。"
+        },
+        {
+          "id": "H07.03",
+          "question": "同 bank 不同操作数为什么会竞争？",
+          "explain": [
+            "在一个有限端口模型中，多份不同寄存器值同时落到同一个 bank，就要共享该 bank 的读取能力。冲突的判断需要同时给出映射、每周期可读数量，以及是否存在复用或相同值合并；仅看寄存器编号同奇偶，不足以跨架构断定发生冲突。",
+            "用三源指令做例子容易分离原因：操作数早已生产完成，消费者没有 RAW；等待来自“本周期取得不完”。改变寄存器分配可改变 bank 分布，但也可能同时改变调度或 reuse。因此微基准应保持工作量和指令序列可比，并把结论限定在实测设备。"
+          ],
+          "example": "若 bank=R mod 2、每 bank 1 读/周期，R0/R2/R1 需要至少两轮读取；这只是教学模型，不是 V100 的实际端口参数。",
+          "pitfall": "把同 bank 与数据依赖混为一谈；两个值可以都 ready，却不能同周期读出。",
+          "check": {
+            "question": "若 R0 已在可用的 operand reuse 缓冲中，还一定需要读 Bank 0 两次吗？",
+            "answer": "不一定；复用可能减少实际 RF 读取需求，需明确缓冲语义。"
+          },
+          "sourceIds": [
+            "H07-s1",
+            "H07-s2"
+          ],
+          "state": "一条指令的不同源值、bank 分布和可用读端口。",
+          "transition": "超出某 bank 本轮供给的请求延后；已取到的值不必重复读取。",
+          "prediction": "均匀分布源值可以减少模型收集轮数，但不保证真实程序必然加速。"
+        },
+        {
+          "id": "H07.04",
+          "question": "读端口带宽如何成为算术前的上限？",
+          "explain": [
+            "算术流水线接受一条指令前需要足够的输入供给。可以先估算“每条指令需要的新操作数字节数 × 每周期目标指令数”，再与寄存器读取路径的可持续供给比较。这个供给上限独立于算术峰值，也不等于 register file 的存储容量。",
+            "估算应扣除立即数、可复用操作数及可能的旁路，并明确单位是标量操作、warp 指令还是完整线程组。真实机器可能分多个周期读取一条 warp 指令，且不同管线共享部分资源；因此估算用来提出瓶颈假设，不能替代反汇编和硬件测量。"
+          ],
+          "example": "教学路径每周期可提供 2 份新操作数，而每条指令要 3 份，则持续每周期 1 条指令的需求超过供给；复用一份可能改变上限。",
+          "pitfall": "直接把 FP32 TFLOPS 除以时钟当成寄存器每周期可读取多少值。",
+          "check": {
+            "question": "把某个源寄存器换成立即数，可能影响什么？",
+            "answer": "可能减少 RF 需求，但编码、指令选择和真实立即数路径也必须检查。"
+          },
+          "sourceIds": [
+            "H07-s1",
+            "H07-s2"
+          ],
+          "state": "目标发射速率、每条新操作数需求、有效读取供给。",
+          "transition": "消费需求长期高于供给时，上游必须降低派发或排队等待。",
+          "prediction": "达到供给上限后，仅增加更多等待中的 warp 不会扩大端口带宽。"
+        },
+        {
+          "id": "H07.05",
+          "question": "operand collector 在模型里保存了什么？",
+          "explain": [
+            "collector 为一条已分配的指令维护待收集操作数集合，把不同周期读到的值逐步汇合。这样某个 bank 忙时，不必要求整条指令所有输入在同一拍一起成功。该模型把“已取得部分输入”与“全部输入就绪”变成两个可观察状态。",
+            "已核对源码中，collector_unit_t::ready 还要求输出寄存器集合有空位；收齐输入但下游满时仍不能派发。这里描述的是 Accel-Sim 的可执行模型，不应画成所有 NVIDIA SM 必备的同名硬件模块。真实硬件可能采用其他缓冲、静态调度或旁路机制。"
+          ],
+          "example": "指令需要 A/B/C：第 1 轮得到 A、C，第 2 轮得到 B；collector 的缺失集合由 {A,B,C} 变为 {B} 再变为空。",
+          "pitfall": "看到 simulator 类名就宣称真实芯片存在相同数量、同样组织的 collector 单元。",
+          "check": {
+            "question": "所有输入已收齐，为什么 ready 仍可能为 false？",
+            "answer": "下游输出入口没有空间；该模型同时检查数据与容量。"
+          },
+          "sourceIds": [
+            "H07-s1"
+          ],
+          "state": "collector 占用状态、缺失操作数集合、下游可用槽。",
+          "transition": "成功读一项就清除缺失位；全部收齐且下游可用时才派发。",
+          "prediction": "扩大 collector 只能缓解特定缓冲约束，不能自动增加 bank 读供给。"
+        },
+        {
+          "id": "H07.06",
+          "question": "不同指令的读请求如何争用同一组 bank？",
+          "explain": [
+            "即使每条指令自身没有多个源落同一 bank，多条在途指令仍可能在同一周期请求同一 bank。此时需要仲裁，决定哪些读取在本轮服务、哪些留到后面。局部无冲突并不等于整体无竞争，检查范围必须覆盖共享该资源的所有候选。",
+            "Accel-Sim 通过读请求仲裁再调用 collect_operand 更新各 collector；subcore 配置还能限制某些请求可使用的 bank 范围。研究时应观察获胜集合与未服务集合，而不是只统计最终完成指令数。真实硬件的仲裁规则不能由这个模型直接推出。"
+          ],
+          "example": "A 要 Bank 0 的 R0，B 要 Bank 0 的 R4；若一轮仅允许一次不同值读取，A/B 至少有一个延后，即使各自都只有这一个源。",
+          "pitfall": "只画一条指令的源寄存器，就断定没有 RF 资源竞争。",
+          "check": {
+            "question": "把 A 的另一个操作数挪到空闲 bank，能消除 A/B 对 Bank 0 的竞争吗？",
+            "answer": "不能，除非改变实际争用的请求或服务能力。"
+          },
+          "sourceIds": [
+            "H07-s1"
+          ],
+          "state": "多指令请求队列、bank 当前占用、每轮获胜集合。",
+          "transition": "仲裁器按模型规则选可服务请求，其余保留到后续周期。",
+          "prediction": "更多在途指令既可提高利用率，也可延长热点 bank 的排队。"
+        },
+        {
+          "id": "H07.07",
+          "question": "operand reuse 节省的是哪一次数据移动？",
+          "explain": [
+            "如果相邻机器指令需要相同的源值，复用机制可以让后一次消费已保留的操作数，减少再次访问 RF 的需求。它优化的是操作数供给，不改变程序必须得到的数值，也不把重复运算自动变成一次计算。是否可复用还取决于源位置、生命周期和具体实现。",
+            "Volta 逆向论文展示了控制信息中的 reuse 标记及相关优化。这里不把某一代缓冲槽数或失效规则推广到新 GPU，也不把它与 CUDA L1 cache 混为一谈。检查时应保留最终 SASS，并区分编译器真正生成了复用机会，还是源码看起来用了同一个变量。"
+          ],
+          "example": "两次独立 FFMA 都使用系数 A；若 A 可由操作数缓冲提供，第二次可能少一次 RF 读取，但依然需要其他源和执行入口。",
+          "pitfall": "认为 reuse 增加可分配寄存器容量，或等同于把变量放进 shared memory。",
+          "check": {
+            "question": "reuse 能让依赖于尚未完成结果的操作数提前就绪吗？",
+            "answer": "不能；复用保存已有正确值，不能创造尚未生产的新值。"
+          },
+          "sourceIds": [
+            "H07-s2",
+            "H07-s4"
+          ],
+          "state": "重复源值、对应操作数位置、缓冲有效性。",
+          "transition": "有效复用命中时使用已保存值，否则按普通路径取得操作数。",
+          "prediction": "在 RF 供给受限的序列里，减少重复读取可能有益；算术受限时收益可能很小。"
+        },
+        {
+          "id": "H07.08",
+          "question": "结果算出来以后，为什么还要看写回资源？",
+          "explain": [
+            "计算完成并不一定等于目标寄存器已经可供后续读取。多个执行单元可能在相近时刻产生结果，而写端口或结果通路只能处理有限数量；如果结果先排队等待写回，消费者的数据可用时刻就被推后。端到端依赖延迟必须包含真正的可见点。",
+            "在 Accel-Sim 的 writeback 模型中，目标会映射到 bank，只有 bank 可用才分配写入；无法完成时返回失败。这个行为说明如何建模资源竞争，不证明真实 NVIDIA 有同样的写回优先级。判断硬件瓶颈时需要把结果产生、旁路和 RF 写入分开。"
+          ],
+          "example": "教学例中 A、B 同时完成并都需写 Bank 0；单写端口只服务 A，则 B 的消费者仍需等 B 的结果可用。",
+          "pitfall": "把 ALU 最后一级完成时间直接当作所有消费者都能读取的时间。",
+          "check": {
+            "question": "若真实设计有结果旁路，消费者是否一定要等 RF 物理写入？",
+            "answer": "不一定；正确性要求的是取得正确结果，具体供给点取决于实现。"
+          },
+          "sourceIds": [
+            "H07-s1"
+          ],
+          "state": "已完成结果、写回请求、端口供给与消费者可用标记。",
+          "transition": "按写回/旁路规则交付结果后，再解除相应消费等待。",
+          "prediction": "多个管线同时完成可能制造尾部排队，增加单纯算术延迟估计的误差。"
+        }
+      ]
+    },
+    {
+      "id": "H08",
+      "kicker": "PIPELINES · LATENCY ≠ THROUGHPUT",
+      "question": "一条指令要执行好几个周期，为什么管线还能不断接新工作？",
+      "summary": "先拆开结果延迟、接收间隔和共享资源，再讨论不同指令混合的真正吞吐上限。",
+      "scope": "使用 L=4、II=1 的原创教学管线。具体 FP32/INT/SFU 资源仅以 NVIDIA 对应架构资料为依据；不把一个代际的峰值或管线名字推广到全部 GPU。",
+      "prerequisites": [
+        "H04",
+        "H06",
+        "H07"
+      ],
+      "sources": [
+        {
+          "id": "H08-s1",
+          "title": "NVIDIA Volta Tuning Guide：Instruction Scheduling / Integer Arithmetic",
+          "url": "https://docs.nvidia.com/cuda/volta-tuning-guide/",
+          "kind": "official",
+          "note": "官方事实；GV100 的调度与独立 FP32/INT32 资源。本文泛化的排队算例是教学假设，核对于 2026-11-07。"
+        },
+        {
+          "id": "H08-s2",
+          "title": "Nsight Compute：Compute Workload Analysis 与 Warp Stall Reasons",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/",
+          "kind": "official",
+          "note": "官方观测定义；ComputeWorkloadAnalysis、InstructionStats、math_pipe_throttle。指标须在目标 GPU/NCU 版本查询，核对于 2026-11-07。"
+        },
+        {
+          "id": "H08-s3",
+          "title": "CUDA Binary Utilities：Instruction Set Reference",
+          "url": "https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html#instruction-set-reference",
+          "kind": "official",
+          "note": "官方工具与指令类别；用于确认编译后的具体 opcode，不等同于完整端口映射表。核对于 2026-11-07。"
+        },
+        {
+          "id": "H08-s4",
+          "title": "Jia et al., Volta 微基准：§4.1 Native instructions",
+          "url": "https://arxiv.org/pdf/1804.06826#page=38",
+          "kind": "paper",
+          "note": "论文实测方法；分离 dependent-issue latency 与吞吐，不在本文复用其数值作为现代 GPU 常数。核对于 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle",
+          "meaning": "采样 warp 等待执行路径可接收；若候选集中使用同一繁忙管线，可能增加。",
+          "caveat": "不是纯 ALU 运算时间，也不是所有 warp 的阻塞总周期；结合 ComputeWorkloadAnalysis 与总耗时。",
+          "sourceId": "H08-s2"
+        },
+        {
+          "name": "ComputeWorkloadAnalysis（section）",
+          "meaning": "比较目标设备上的实际计算管线利用率，识别指令混合是否集中压在一条路径。",
+          "caveat": "按 section 报告的峰值和 active/elapsed 口径解读，不比较不同单位的百分比。",
+          "sourceId": "H08-s2"
+        },
+        {
+          "name": "InstructionStats（section）",
+          "meaning": "确认解包、转换和地址计算在最终指令流中的比重。",
+          "caveat": "源码 FLOPs 不包含所有这些操作，且 PTX 一条也不保证只生成一条 SASS。",
+          "sourceId": "H08-s2"
+        }
+      ],
+      "walkthrough": {
+        "title": "延迟 4 周期，仍可连续接收独立指令",
+        "assumption": "教学模型：每周期开头处理完成，随后最多接收一条；issue 等同入口接收。A/B 独立，L=4、II=1，不建模中间队列和写回冲突。",
+        "nodes": [
+          {
+            "id": "issue",
+            "label": "发射入口",
+            "kind": "compute"
+          },
+          {
+            "id": "flight",
+            "label": "管线在途",
+            "kind": "compute"
+          },
+          {
+            "id": "ready",
+            "label": "可用结果",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "c0：接收 A",
+            "explanation": "A 将在 c4 开头可用。此刻只有 A 在途，不代表入口未来四拍都被锁住。",
+            "active": [
+              "issue",
+              "flight"
+            ],
+            "values": {
+              "issue": "接收 A",
+              "flight": "A",
+              "ready": "无"
+            },
+            "edges": [
+              {
+                "from": "issue",
+                "to": "flight",
+                "label": "A 进入"
+              }
+            ]
+          },
+          {
+            "title": "c1：接收独立 B",
+            "explanation": "间隔达到 II=1，入口可接收 B；A 仍未完成。B 不读取 A 的输出，因此不触发 RAW。",
+            "active": [
+              "issue",
+              "flight"
+            ],
+            "values": {
+              "issue": "接收 B",
+              "flight": "A、B",
+              "ready": "无"
+            },
+            "edges": [
+              {
+                "from": "issue",
+                "to": "flight",
+                "label": "B 进入"
+              }
+            ]
+          },
+          {
+            "title": "c2—c3：结果尚未就绪",
+            "explanation": "管线同时保有多个在途操作。没有更多独立工作，所以入口空闲，A 的消费者仍不能发射。",
+            "active": [
+              "flight"
+            ],
+            "values": {
+              "issue": "空闲",
+              "flight": "A、B",
+              "ready": "无"
+            },
+            "edges": []
+          },
+          {
+            "title": "c4：A 先完成",
+            "explanation": "A 从在途集合移到结果集合。B 到 c5 才完成；A 的消费者现在才可能合法开始。",
+            "active": [
+              "ready",
+              "flight"
+            ],
+            "values": {
+              "issue": "可接收",
+              "flight": "B",
+              "ready": "A"
+            },
+            "edges": [
+              {
+                "from": "flight",
+                "to": "ready",
+                "label": "A 完成"
+              }
+            ]
+          },
+          {
+            "title": "c5：B 完成",
+            "explanation": "两个连续接收的独立操作相隔一拍完成。持续吞吐由接收与供给能力约束，不是简单取 1/L。",
+            "active": [
+              "ready"
+            ],
+            "values": {
+              "issue": "可接收",
+              "flight": "空",
+              "ready": "A、B"
+            },
+            "edges": [
+              {
+                "from": "flight",
+                "to": "ready",
+                "label": "B 完成"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：测一条链与多条独立链（尚未执行）",
+        "change": "固定总操作数，扫描独立累加器数量；再比较以 FP32、整数、转换或特殊函数为主的指令序列。",
+        "expect": "单链首先反映依赖限制，独立链足够时更接近资源吞吐上限；不同指令混合可能改变瓶颈路径。",
+        "measure": "保留最终 SASS、寄存器数、正确性结果和有效工作量；测总时间及 ComputeWorkloadAnalysis、InstructionStats。",
+        "confounds": "更换数学实现可能改变精度、特殊输入行为与指令数量；增加 ILP 可能降低 occupancy；所有数字必须绑定具体芯片和版本。"
+      },
+      "atoms": [
+        {
+          "id": "H08.01",
+          "question": "latency 和 initiation interval 分别回答什么？",
+          "explain": [
+            "latency 是一次操作从被接收到其结果可供指定消费者使用的间隔；initiation interval（II）是入口连续接收独立操作的最小间隔。一个多级管线可以同时保存多个操作，所以结果尚未完成不代表入口无法继续接收，反之结果延迟短也不保证吞吐高。",
+            "在理想单入口模型中，持续吞吐至多为 1/II，单条依赖链却受 latency 约束。要用独立工作覆盖延迟，还需足够发射能力、输入带宽和在途容量。这里的简单关系是教学上限；不同指标若分别以线程操作、warp 指令或周期计数，必须先统一单位。"
+          ],
+          "example": "L=4、II=1：A 在 c0 接收、c4 可用；独立 B 可在 c1 接收、c5 可用。依赖 A 的 B 则不能照此安排。",
+          "pitfall": "拿依赖链的每条耗时直接推算管线峰值，或把 32-lane 指令当成一拍完成。",
+          "check": {
+            "question": "L=8、II=2 的理想入口，每周期能长期接收多少条独立操作？",
+            "answer": "上限是 0.5 条；还需要其他资源持续供给。"
+          },
+          "sourceIds": [
+            "H08-s1",
+            "H08-s4"
+          ],
+          "state": "结果可用时刻、入口下次允许接收时刻、在途操作。",
+          "transition": "每条操作在接收时登记完成时刻；入口是否空闲由 II 单独控制。",
+          "prediction": "单链和多独立链会给出不同每条平均时间，这并不矛盾。"
+        },
+        {
+          "id": "H08.02",
+          "question": "scheduler issue 是否已经意味着算术开始？",
+          "explain": [
+            "发射是一个被选中指令跨过调度边界的事件，执行入口接收是另一处资源边界。两者之间可以存在缓冲、操作数收集或派发步骤；因此在真实系统和详细模拟器中，发射时刻不一定就是计算单元开始处理的时刻。",
+            "教学模型为了清楚，可以把两者合并，但必须明确这一假设。分析队列时则要分开入口排队与执行延迟：队列还有空位时可以继续接收，队列满时反压传回上游。用一项 issue 利用率无法证明每个下游单元同时满载，也不能代替结果完成计数。"
+          ],
+          "example": "一个两槽队列接收 A/B 后，执行管线仍因操作数不足未取走它们；第三条 C 会受容量限制，虽然 C 自身数据已 ready。",
+          "pitfall": "把 issue-active 直接解释为 ALU 每一条通路都在做有效计算。",
+          "check": {
+            "question": "如果删掉中间队列，教学模型需要改变哪些规则？",
+            "answer": "发射资格必须直接检查执行入口可接收，否则会凭空容纳指令。"
+          },
+          "sourceIds": [
+            "H08-s1",
+            "H08-s2"
+          ],
+          "state": "候选指令、派发队列占用、执行入口接收能力。",
+          "transition": "队列有空位才接收；下游取走后释放槽，满队列向上游施加反压。",
+          "prediction": "短时 issue 很忙但管线利用不高，可能来自缓冲、供给或统计窗口差异。"
+        },
+        {
+          "id": "H08.03",
+          "question": "FP32 与 INT 指令是否使用独立资源？",
+          "explain": [
+            "资源映射是架构问题，不能仅由数据类型判断。NVIDIA 为 GV100 描述了独立 FP32 与 INT32 执行资源，因此一定条件下可以重叠相关工作；其他芯片的资源数量、共享关系和可同时执行组合需另查对应架构资料。名称同为 Ampere，也不应忽略具体芯片差别。",
+            "即使两类运算的执行单元独立，它们仍可能共享发射、寄存器供给或结果通路。把地址计算穿插在浮点计算之间可能利用空闲路径，但若地址生成依赖尚未就绪的数据，或公共入口已经饱和，就不能获得理想重叠。性能分析要追踪完整依赖图。"
+          ],
+          "example": "在不改变算法的前提下，把下一迭代的指针更新提前到当前独立 FMA 之间；是否获益由目标机器的最终指令与供给情况决定。",
+          "pitfall": "见到两类 core 数量就把它们的理论吞吐直接相加当成 kernel 性能。",
+          "check": {
+            "question": "独立 INT 单元能让依赖浮点结果的整数转换提前完成吗？",
+            "answer": "不能；独立资源不消除数据依赖。"
+          },
+          "sourceIds": [
+            "H08-s1",
+            "H08-s3"
+          ],
+          "state": "最终 FP/INT opcode、依赖关系及共享入口。",
+          "transition": "只有依赖满足并有对应路径供给时，两个执行流才可能重叠。",
+          "prediction": "地址计算较多的 kernel，可能比纯 FMA 峰值基准更受共享路径影响。"
+        },
+        {
+          "id": "H08.04",
+          "question": "为什么一个特殊函数可能压住整个内核？",
+          "explain": [
+            "特殊函数相关指令的处理能力与通用 FP32 加乘不一定相同。大量 warp 同时执行同一类低吞吐操作时，会把请求集中到有限路径；单个操作的延迟和该路径每周期能接收多少操作需要分别测量。增加 warp 只能提供更多候选，不能扩宽饱和的路径。",
+            "还要区分 CUDA 数学函数、intrinsic、PTX 和最终 SASS：一个高层函数可能包含范围规约、特殊输入处理和多个指令，并不等于一次 MUFU。使用近似版本或 fast math 前，应确定误差、舍入及边界语义是否满足需求，再比较相同有效工作量。"
+          ],
+          "example": "expf 与某种近似计算路径可能生成不同指令序列；不能只数源码中出现了多少次 exp，就推定 SFU 指令数量。",
+          "pitfall": "把所有 transcendental 函数都视为一条固定时延、相同吞吐的硬件指令。",
+          "check": {
+            "question": "若对应路径已经持续饱和，warp 数翻倍是否保证提速？",
+            "answer": "不会；它可能只增加排队，甚至引入资源开销。"
+          },
+          "sourceIds": [
+            "H08-s2",
+            "H08-s3"
+          ],
+          "state": "最终指令序列、相关管线供给能力、允许数值误差。",
+          "transition": "候选在目标管线可用时进入；超过供给的请求必须等待。",
+          "prediction": "相同 FLOPs 的 kernel 也可能因特殊函数比例不同而性能差异很大。"
+        },
+        {
+          "id": "H08.05",
+          "question": "不同 opcode 为什么仍可能相互拖慢？",
+          "explain": [
+            "opcode 名称描述操作语义，并不保证拥有专属资源。不同指令可能在执行路径、发射端口、寄存器读写或中间队列汇合。若共同瓶颈只允许有限服务，单独测试都很快的两段代码混合运行，也不能简单把各自峰值同时实现。",
+            "建立最小模型时，先列出每条指令经过的资源及单位需求，再看哪一处总需求超过容量。真实 GPU 的内部映射不全公开，可用同工作量的混合比例扫描检验竞争假设；但是非线性曲线也可能来自寄存器使用、缓存或编译变化，不能只据曲线画出确定电路。"
+          ],
+          "example": "模型中 A/B 用不同计算单元，却共用每周期一条的入口；各自单独可达一条/周期，混合后的总和仍最多一条/周期。",
+          "pitfall": "把不同管线名称理解成从取指到写回全程完全独立。",
+          "check": {
+            "question": "两个执行单元都有空闲，入口满了还会阻止发射吗？",
+            "answer": "会，端到端吞吐受经过的任何共享瓶颈限制。"
+          },
+          "sourceIds": [
+            "H08-s2",
+            "H08-s3"
+          ],
+          "state": "指令到资源的路径、各资源容量、混合比例。",
+          "transition": "多类需求在共享资源相加，超过供给时引发排队或反压。",
+          "prediction": "混合指令的性能上限可能低于孤立峰值之和。"
+        },
+        {
+          "id": "H08.06",
+          "question": "低比特 kernel 的解包为什么不是免费操作？",
+          "explain": [
+            "压缩权重减少存储和搬运字节，但参与乘法前往往还需位提取、符号处理、类型转换、scale 或 zero-point 运算与布局重排。它们消耗指令、操作数和临时寄存器，可能走与主计算不同或共享的路径；节省内存不等于等比例减少总执行时间。",
+            "应把一块权重从 packed 形式到计算可用形式的实际 SASS 列出来，按 tile 复用程度分摊成本。若一次解包结果可以服务多次计算，开销容易摊薄；极小 batch 或低复用场景则可能让解包成为关键路径。比较方案时还要保持数值格式与输出正确性一致。"
+          ],
+          "example": "读取一个 packed 字后拆成多个低比特值，需要额外操作；若每个值只用于一次乘法，这些操作可能比大 tile 重复使用时更显眼。",
+          "pitfall": "只用压缩率预测低比特提速，忽略解包、转换和寄存器压力。",
+          "check": {
+            "question": "把解包移到更早位置一定降低总时间吗？",
+            "answer": "不一定；它可能隐藏延迟，也可能延长变量活跃期并降低 occupancy。"
+          },
+          "sourceIds": [
+            "H08-s2",
+            "H08-s3"
+          ],
+          "state": "packed 输入、解包临时值、scale、最终计算片段。",
+          "transition": "每种表示转换都要计入指令与依赖，只有真正复用才分摊成本。",
+          "prediction": "小 batch 的瓶颈可能从权重搬运转移到转换和调度。"
+        },
+        {
+          "id": "H08.07",
+          "question": "流水线已经饱和后，更多 warp 带来什么？",
+          "explain": [
+            "更多 resident warp 增加调度器可选择的上下文，主要帮助填补依赖、访存或控制流造成的空档。如果目标管线已经每个允许接收时刻都有有效工作，那么额外 warp 无法提高该资源的物理供给上限，只会提供更多排队候选。",
+            "更高驻留还可能增加缓存工作集、同步等待和资源分配压力；为追求 occupancy 降低每线程寄存器，有时会引发 spill。因此要看有效吞吐与时间是否随 warp 数继续改善，而不是把 occupancy 百分比本身当目标。饱和也要结合合理的峰值口径判断。"
+          ],
+          "example": "教学管线 II=2，已有独立指令填满每个可接收周期；再加入 8 个 ready warp，长期接收上限依然是每周期 0.5 条。",
+          "pitfall": "把“延迟隐藏不足”和“资源已经满负荷”当成同一个增加 warp 就能解决的问题。",
+          "check": {
+            "question": "更多 warp 让 not_selected 增多但时间不变，可能说明什么？",
+            "answer": "可能已有足够候选覆盖延迟，竞争者变多而瓶颈容量没变。"
+          },
+          "sourceIds": [
+            "H08-s1",
+            "H08-s2"
+          ],
+          "state": "可发射候选数、入口空档、资源持续利用率。",
+          "transition": "优先用新增候选填空档；没有空档时不能突破接收间隔。",
+          "prediction": "吞吐随 warp 数上升后出现平台，可能标志已触及某资源上限。"
+        },
+        {
+          "id": "H08.08",
+          "question": "为什么优化一种指令后，热点会换地方？",
+          "explain": [
+            "kernel 的时间由实际关键路径与最紧张资源共同决定。减少某类操作的需求以后，原来被掩盖的另一处上限可能变得可见，例如搬运变快后解包占比上升，或计算变快后同步与启动成本更突出。这是瓶颈迁移，不意味着前一项优化无效。",
+            "分析指令混合应以同一任务为基准：看每输出元素所需的各类指令和传输，而不是比较原始指令总数。融合可能减少搬运却增加寄存器；展开可能增加 ILP 却增大指令体积。因此一次只改变一项主要因素，并重新检查总时间与新的限制路径。"
+          ],
+          "example": "原先每 tile 搬运 100 单位、转换 30 单位；把搬运减半后，转换在剩余成本中的相对份额更大，但其绝对操作数可以完全没变。",
+          "pitfall": "把百分比变大误判为该阶段绝对变慢，或认为指令数减少就必定加速。",
+          "check": {
+            "question": "优化后某类 stall 占比变高，首先还需要什么信息？",
+            "answer": "绝对时间、计数和归一分母，确认占比变化是否只是其他部分缩短。"
+          },
+          "sourceIds": [
+            "H08-s2",
+            "H08-s3"
+          ],
+          "state": "每单位有效工作量的资源需求、总时间、归一分母。",
+          "transition": "改变一类需求后重新计算资源压力，识别新的关键路径。",
+          "prediction": "两项优化分别有效，组合收益也未必等于两者倍率相乘。"
+        },
+        {
+          "id": "H08.09",
+          "question": "CUDA Core 数量能直接预测一个 kernel 吗？",
+          "explain": [
+            "CUDA Core 是架构资料对特定标量计算资源的计数口径，不是 CPU 意义上的完整独立核心，也不是同时运行的 CUDA 线程数量。warp 的逻辑宽度、scheduler 数、执行 lane 数、执行间隔和结果延迟属于不同层次，不能互相替换。",
+            "从资源数量推导理论峰值时，还要限定数据类型、指令、频率以及每条指令的运算计数，例如 FMA 常按乘加两个 FLOP 计。真实 kernel 还需数据供给、足够有效 lane 和兼容指令混合。Tensor Core 峰值、稀疏峰值也不能直接当作普通 FP32 代码上限。"
+          ],
+          "example": "一张卡标注很多 CUDA Core，并不意味着任意相同数量的线程都能在一拍完成各自的指令；线程还通过 warp 调度和具体执行路径。",
+          "pitfall": "把 CUDA Core 数除以 32 就当成实际同时完成的 warp 数。",
+          "check": {
+            "question": "比较两个 GPU 的 core 数之前，至少要统一哪些条件？",
+            "answer": "数据类型、指令与峰值计数、架构资源口径和频率，并最终测同一 workload。"
+          },
+          "sourceIds": [
+            "H08-s1",
+            "H08-s2"
+          ],
+          "state": "资源计数定义、指令类型、有效 lane、频率。",
+          "transition": "先把逻辑工作映射到对应资源，再讨论容量和持续供给。",
+          "prediction": "core 数更高的设备，也可能在低并发或访存受限 kernel 中没有同比例收益。"
+        }
+      ]
+    },
+    {
+      "id": "H09",
+      "kicker": "GLOBAL MEMORY · ADDRESS SETS",
+      "question": "32 个线程执行同一条 load，究竟产生多少访存工作？",
+      "summary": "从参与 lane 的字节区间出发计算 sector 集合，再把请求、cache 命中和下层流量分别统计。",
+      "scope": "地址算例限定为 CC 6.0+ 常见 32-byte sector 模型、32-lane warp、自然对齐的每 lane 4-byte load，除非单点另行声明。不是 HBM 总线逐拍仿真。",
+      "prerequisites": [
+        "H02",
+        "H06"
+      ],
+      "sources": [
+        {
+          "id": "H09-s1",
+          "title": "CUDA Best Practices：Coalesced Access to Global Memory",
+          "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#coalesced-access-to-global-memory",
+          "kind": "official",
+          "note": "官方规则；CC 6.0+ 示例以覆盖 lane 地址的 32-byte 传输单元分析合并。本文地址/sector 计数由规则独立计算；核对于 2026-11-07。"
+        },
+        {
+          "id": "H09-s2",
+          "title": "Nsight Compute：L1/TEX Cache Memory Table",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/#l1-tex-cache",
+          "kind": "official",
+          "note": "官方计数口径；区分 request、sector、wavefront 和命中，核对于 2026-11-07。"
+        },
+        {
+          "id": "H09-s3",
+          "title": "Nsight Compute Triage：访存模式与 sector/request",
+          "url": "https://docs.nvidia.com/nsight-compute/ComputeTriage/",
+          "kind": "official",
+          "note": "官方指标名来源；比值基线需结合访问宽度和参与线程数，不能把 4 当成全部指令的统一阈值。核对于 2026-11-07。"
+        },
+        {
+          "id": "H09-s4",
+          "title": "CUPTI：PerfWorks Metrics Mapping",
+          "url": "https://docs.nvidia.com/cupti/13.2.1/main/main.html",
+          "kind": "official",
+          "note": "官方指标映射；用于核对 DRAM bytes、global load requests/sectors 等具体名称，实际可用性以目标设备查询为准。核对于 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum / l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
+          "meaning": "L1TEX global load 的平均 sector/request。32 个 lane 各读对齐连续 4 B 的基线是 4。",
+          "caveat": "这是两个 sum 的比值；64-bit、128-bit、部分 lane 或重复地址应重算基线，不等于 DRAM 放大倍数。",
+          "sourceId": "H09-s3"
+        },
+        {
+          "name": "dram__bytes_read.sum",
+          "meaning": "设备内存读字节，用来检查源级 sector 增长是否真正传到 DRAM。",
+          "caveat": "缓存命中、其他设备活动和 replay 会影响结果；不能用 L1 sector 数直接替代它。",
+          "sourceId": "H09-s4"
+        },
+        {
+          "name": "smsp__pcsamp_warps_issue_stalled_lg_throttle",
+          "meaning": "采样 warp 因 local/global 指令队列压力等待的观察线索。",
+          "caveat": "队列压力不是合并效率的直接测量；先看实际指令数、sector/request 和访存路径。",
+          "sourceId": "H09-s2"
+        }
+      ],
+      "walkthrough": {
+        "title": "把一个 warp 的地址压缩成 sector 集合",
+        "assumption": "教学地址计算：32 lane，各读 4 B，地址 A(lane)=4+4×lane。sector id=floor(byteAddress/32)。只计这一条 load 覆盖的 sector，不推断 DRAM 传输。",
+        "nodes": [
+          {
+            "id": "lanes",
+            "label": "参与 lane",
+            "kind": "compute"
+          },
+          {
+            "id": "addr",
+            "label": "字节区间",
+            "kind": "data"
+          },
+          {
+            "id": "sectors",
+            "label": "Sector 集合",
+            "kind": "state"
+          },
+          {
+            "id": "cache",
+            "label": "缓存路径",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "确定参与者与宽度",
+            "explanation": "32 个 lane 都参与，每个读 4 B；所需逻辑数据总量 128 B。",
+            "active": [
+              "lanes"
+            ],
+            "values": {
+              "lanes": "0…31 × 4 B",
+              "addr": "尚未展开",
+              "sectors": "未统计",
+              "cache": "未知"
+            },
+            "edges": []
+          },
+          {
+            "title": "展开地址区间",
+            "explanation": "lane 0 读取 [4,7]，lane 31 读取 [128,131]；整个集合覆盖 [4,131]。",
+            "active": [
+              "addr"
+            ],
+            "values": {
+              "lanes": "32 active",
+              "addr": "[4,131]",
+              "sectors": "未去重",
+              "cache": "未知"
+            },
+            "edges": [
+              {
+                "from": "lanes",
+                "to": "addr",
+                "label": "A=4+4×lane"
+              }
+            ]
+          },
+          {
+            "title": "按 32 B 对齐区间分组",
+            "explanation": "去重得到 sector 0、1、2、3、4，共 5 个。连续访问也会因偏移多触及一个 sector。",
+            "active": [
+              "sectors"
+            ],
+            "values": {
+              "lanes": "32 active",
+              "addr": "128 B useful",
+              "sectors": "{0,1,2,3,4}",
+              "cache": "尚未查命中"
+            },
+            "edges": [
+              {
+                "from": "addr",
+                "to": "sectors",
+                "label": "floor(address/32)"
+              }
+            ]
+          },
+          {
+            "title": "先计请求，再区分命中",
+            "explanation": "该例访问 5 个 sector，但哪些需要继续访问 L2/DRAM，取决于缓存状态。不能在这里写成“读了 160 B HBM”。",
+            "active": [
+              "cache"
+            ],
+            "values": {
+              "lanes": "32 active",
+              "addr": "128 B useful",
+              "sectors": "5 × 32 B",
+              "cache": "命中/未命中待测"
+            },
+            "edges": [
+              {
+                "from": "sectors",
+                "to": "cache",
+                "label": "查询所需 sector"
+              }
+            ]
+          },
+          {
+            "title": "只改偏移做对照",
+            "explanation": "把起点改为 0，访问 [0,127]，覆盖 sector 0…3。几何计数从 5 变为 4；时间改善仍需实测。",
+            "active": [
+              "addr",
+              "sectors"
+            ],
+            "values": {
+              "lanes": "32 active",
+              "addr": "[0,127]",
+              "sectors": "{0,1,2,3}",
+              "cache": "保持实验状态"
+            },
+            "edges": [
+              {
+                "from": "addr",
+                "to": "sectors",
+                "label": "对齐后 4 个"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：只扫描 offset 与 stride（尚未执行）",
+        "change": "对相同数量的输出，分别扫描自然对齐的 4-byte 起点偏移和相邻 lane 间 stride；防止越界并保留输出校验。",
+        "expect": "按 sector 集合预测 L1TEX sector/request；缓存复用可能减弱 DRAM 流量和耗时的同比例变化。",
+        "measure": "记录最终 load 宽度、active lane 数、L1TEX requests/sectors、L2 与 DRAM bytes 和总时间。执行前查询目标 GPU 指标支持。",
+        "confounds": "邻接 warp 重用同一 sector、预取/缓存、编译器向量化、边界线程和 profiler replay 都可能改变结果；不能用理论几何直接替代实测带宽。"
+      },
+      "atoms": [
+        {
+          "id": "H09.01",
+          "question": "合并访存看的是线程顺序，还是地址集合？",
+          "explain": [
+            "一次 warp 访存指令携带参与线程的地址与访问宽度。硬件需要服务的是这些字节区间的集合；把区间按支持的访问粒度分组，可以计算本次需要触及多少 sector。源码中线程编号连续，只是容易生成连续地址，并不保证实际地址也连续。",
+            "在本模块 32-byte sector 模型下，对每个参与 lane 求所有触及 sector 的编号，再去重计数。这个几何步骤先不考虑命中与否，也不把多个 warp 的请求自动合并为一个指令请求。请求数、sector 数和实际到达下层的流量属于不同统计层次。"
+          ],
+          "example": "lane l 读 A+4l 时通常连续；lane l 读 A+4×index[l] 时，需要看到 index 的分布才能判断合并。",
+          "pitfall": "把“32 个线程一起执行”当成“一次 128-byte 连续读取”的保证。",
+          "check": {
+            "question": "把同一 warp 的 lane 地址顺序打乱但集合不变，sector 数会变吗？",
+            "answer": "在这里的集合模型中不会，覆盖的字节区间仍相同。"
+          },
+          "sourceIds": [
+            "H09-s1",
+            "H09-s2"
+          ],
+          "state": "参与掩码、每 lane 地址、访问宽度、sector 粒度。",
+          "transition": "展开每个字节区间，映射到 sector 后对编号去重。",
+          "prediction": "相同 active lane 数也可能产生完全不同的 sector 数。"
+        },
+        {
+          "id": "H09.02",
+          "question": "对齐的 32 个 float 为什么只覆盖 4 个 sector？",
+          "explain": [
+            "设起点 A 是 32-byte 对齐，lane l 读取 A+4l 开始的 4-byte float。32 个 lane 的区间正好连续覆盖 128 B；每 8 个 float 占一个 32-byte sector，所以共覆盖 4 个。这里的“4”来自明确的宽度与掩码，而不是 warp 的永恒常数。",
+            "如果每 lane 改成 8 B 或 16 B，并且地址仍构成连续无重复区间，总有效数据就变为 256 B 或 512 B，需要重新计算。若只有部分 lane 参与或多个 lane 重复同一地址，也会改变基线。因此 NCU sector/request 必须与那条实际 SASS 访存的访问宽度一起看。"
+          ],
+          "example": "A=0：lane 0…7 触及 sector 0，8…15 触及 1，16…23 触及 2，24…31 触及 3。",
+          "pitfall": "把 sector/request 超过 4 一概判为差访问，忽略 64-bit 或向量化 load。",
+          "check": {
+            "question": "32 lane 各读连续 8 B，起点仍对齐，需要多少个 32 B sector？",
+            "answer": "共 256 B，覆盖 8 个 sector。"
+          },
+          "sourceIds": [
+            "H09-s1",
+            "H09-s2"
+          ],
+          "state": "A 的对齐、32 个 4 B 区间、32 B sector。",
+          "transition": "连续区间按每 32 B 分段；全部所需字节必须落入所计 sector。",
+          "prediction": "对齐与完整参与下，标量 float load 的平均比值应接近几何基线 4。"
+        },
+        {
+          "id": "H09.03",
+          "question": "只偏移一个 float，为什么可能多一个 sector？",
+          "explain": [
+            "起点从 32-byte 边界后移 4 B，32 个 float 的联合区间变成 [A+4,A+131]。首尾跨过了原本四个 sector 的范围，需要第五个 sector 才能覆盖末尾。每个 float 仍可自然对齐，因此这种例子不需要制造非法的类型对齐访问。",
+            "多触及一个 sector 表示本条请求的几何工作增加，不意味着 DRAM 必须同比例多读、时间一定增加 25%。邻接 warp 可能复用多取到的区间，缓存可能早有数据，其他路径也可能限制吞吐。把 sector 计数与时间并列测量才能分辨影响停留在哪一层。"
+          ],
+          "example": "A=0 时连续读 [0,127] 是 4 个 sector；从 4 开始连续读 [4,131] 是 5 个，覆盖容量 160 B、独特有效数据仍为 128 B。",
+          "pitfall": "用非法未对齐的 float4 指针强行测试，或把 5/4 直接当作 kernel 耗时倍率。",
+          "check": {
+            "question": "偏移 32 B 后仍读取 128 B 连续数据，sector 数是多少？",
+            "answer": "仍是 4，只是覆盖的 sector 编号整体移动。"
+          },
+          "sourceIds": [
+            "H09-s1",
+            "H09-s2"
+          ],
+          "state": "起点偏移、访问末端、sector 边界。",
+          "transition": "计算首尾触及编号及中间区间，而非只看首地址是否对齐到元素宽度。",
+          "prediction": "offset 按 32 B 周期扫描时，几何计数会出现规律性变化。"
+        },
+        {
+          "id": "H09.04",
+          "question": "stride 增大如何降低一次请求中的有效密度？",
+          "explain": [
+            "在每 lane 读 4 B 的模型中，地址为 A+4×s×lane，s 是以元素为单位的 stride。s=1 时邻居共享 sector；s 增大后，参与地址之间留下未使用空洞，一条请求可能覆盖更多 sector，而有效数据仍是 32×4 B。",
+            "计数应该对实际 sector 编号去重，不能无限使用“sector 数等于 4s”这一局部关系。比如 s 足够大时，每 lane 各落不同 sector，最多触及 32 个 sector；继续增大 stride 还可能改变缓存和 TLB 行为，但不会让这条自然对齐 4-byte load 超过每 lane 一个 sector。"
+          ],
+          "example": "A=0：s=1 得 4 个 sector，s=2 得 8 个，s=8 得 32 个；s=16 仍是 32 个，但地址跨度更大。",
+          "pitfall": "用 stride 乘一个固定带宽损失因子，忽略上限、缓存与页跨度。",
+          "check": {
+            "question": "s 从 8 增至 16，sector 数不变，耗时是否必定不变？",
+            "answer": "不必；工作集跨度、缓存命中和翻译行为仍可能变化。"
+          },
+          "sourceIds": [
+            "H09-s1"
+          ],
+          "state": "元素 stride、lane 地址集合、去重后的 sector 编号。",
+          "transition": "stride 只改变地址；请求粒度与去重规则不变。",
+          "prediction": "有效字节不变而 sector 数增多时，几何有效密度会下降。"
+        },
+        {
+          "id": "H09.05",
+          "question": "gather 一定是不合并访问吗？",
+          "explain": [
+            "gather 只说明每个 lane 的地址来自索引，并不说明这些索引分散到哪里。若索引只是把一个连续小区域重新排列，地址集合仍紧凑；若索引遍布大工作集，则可能让每个 lane 触及不同 sector。判断需要看分布而非操作名称。",
+            "对一次 gather，可以同时记录独特元素数、sector 数和地址跨度。它们分别帮助区分重复利用、局部合并与潜在缓存/TLB 压力。同样 32 次逻辑读取，重复读少数位置与读 32 个遥远位置产生的工作完全不同，也不应使用相同的理论有效字节定义。"
+          ],
+          "example": "index=[31,30,…,0]，从同一个对齐的 32-float 区间反向读取，仍覆盖 4 个 sector；不因 lane 顺序反转变成 32 个。",
+          "pitfall": "把索引访问统一判为随机，或只用平均 stride 描述带聚类的分布。",
+          "check": {
+            "question": "两组 gather 都触及 8 个 sector，就能断言时间一致吗？",
+            "answer": "不能；sector 是否命中、地址生成开销和依赖链都可能不同。"
+          },
+          "sourceIds": [
+            "H09-s1",
+            "H09-s2"
+          ],
+          "state": "索引值、独特元素、sector 集合、地址跨度。",
+          "transition": "把间接地址算出后，仍按普通区间覆盖规则合并。",
+          "prediction": "重排计算顺序让索引聚类可能改善局部性，但必须计入重排成本。"
+        },
+        {
+          "id": "H09.06",
+          "question": "向量化 load 减少的是字节数还是指令工作？",
+          "explain": [
+            "向量化通常让一个线程一次取得更多相邻元素。在总数据相同且布局正确时，必要的独特字节并不会减少；收益可能来自更少的访存指令、地址计算或队列请求，以及更好的请求组织。必须查看编译器是否真的生成对应宽度的机器指令。",
+            "向量类型有对齐要求，边界还需合法处理。对于同样 512 B 数据，32 lane 各读 16 B 的一条向量 load 与多条标量 load，sector/request 不能拿同一个理想值比较；向量指令覆盖 16 个 sector 本身可以完全高效。增加宽度也可能延长寄存器活跃期。"
+          ],
+          "example": "32 lane 各连续读取 float4，且 A+16×lane 对齐，总计 512 B、16 个 sector。这里比值 16 并不意味着比标量基线 4 差四倍。",
+          "pitfall": "只看到 sector/request 增大就否定向量化，或假设 float4 必定生成一条宽 load。",
+          "check": {
+            "question": "向量化后 DRAM bytes 不变，但时间减少，合理吗？",
+            "answer": "合理；减少的可能是指令/请求/地址生成成本而非必要数据量。"
+          },
+          "sourceIds": [
+            "H09-s1",
+            "H09-s2",
+            "H09-s3"
+          ],
+          "state": "相同数据量、每 lane 向量宽度、对齐、最终指令数。",
+          "transition": "合并相邻元素后重新计算每条请求的理想 sector 数，再比较总工作量。",
+          "prediction": "若瓶颈在访存指令供给，向量化可能在 DRAM 流量不变时获益。"
+        },
+        {
+          "id": "H09.07",
+          "question": "只有少量 lane 参与时，怎样计算有效密度？",
+          "explain": [
+            "访问掩码决定哪些线程真正提交地址。若只有连续 8 个 lane 各读一个 float，并落在同一个 sector，1 个 sector 就足够；若相同 8 个 lane 的地址散在 8 个 sector，传输粒度工作会大得多。参与线程少本身不等于访问低效，布局仍是关键。",
+            "比较请求效率时，分母应匹配 active 或 predicated-on 的访问集合。不能因为完整 warp 的理想值是 4，就把只需一个 sector 的请求误判成异常；也不能把 32 个逻辑线程当成都读了数据。边界 tile 中常见这种情况，应区分必要尾部与可避免布局浪费。"
+          ],
+          "example": "lane 0…7 读 A+4×lane，A 对齐时有效 32 B、1 个 sector；若读 A+32×lane，仍只有 32 B 有效数据，却触及 8 个 sector。",
+          "pitfall": "用 blockDim 或 warp 宽度代替该条指令实际参与线程数。",
+          "check": {
+            "question": "一个 lane 读 4 B，最少覆盖一个 32 B sector，意味着程序必定差吗？",
+            "answer": "不意味；可能是必需的边界或标量工作，要看频率和总成本。"
+          },
+          "sourceIds": [
+            "H09-s1",
+            "H09-s2"
+          ],
+          "state": "本条指令实际参与 mask、每 lane 地址与宽度。",
+          "transition": "剔除未参与 lane 的区间，再求 sector 并集。",
+          "prediction": "相同 active lane 数，集中布局通常比分散布局需要更少 sector。"
+        },
+        {
+          "id": "H09.08",
+          "question": "useful bytes 为什么不能直接当作 DRAM bytes？",
+          "explain": [
+            "“有用字节”必须先定义。可按独特有效数据计算，也可按各线程逻辑消费量累计；重复读同一值时二者不同。访存系统按缓存及传输粒度工作，可能过取、复用或命中，因此逻辑消费量、L1 请求字节和 DRAM 实际字节不会普遍相等。",
+            "用独特数据作为几何效率分子时，分母可选本条请求覆盖的 sector 容量；这只评价地址分布，不是端到端 HBM 利用率。报告带宽必须同时写清 byte 来源、时间窗口、读写是否相加以及缓存条件。否则“超过峰值”可能仅意味着重复数据被缓存服务。"
+          ],
+          "example": "32 lane 都读同一个 4 B 值：逻辑消费累计 128 B，独特数据仅 4 B，覆盖一个 32 B sector；不能把它宣称为 400% DRAM 传输效率。",
+          "pitfall": "混用 requested bytes 和硬件实际读字节，或把缓存带宽报告成 HBM 带宽。",
+          "check": {
+            "question": "L1 sector/request 不变而 DRAM bytes 降低，可能发生了什么？",
+            "answer": "更多请求在缓存层得到服务，或下层流量被复用；需保持同一工作量与测量条件。"
+          },
+          "sourceIds": [
+            "H09-s2",
+            "H09-s4"
+          ],
+          "state": "逻辑消费字节、独特字节、各层计数与时间窗口。",
+          "transition": "在每个层级分别统计，再用一致单位比较，不能跨层直接替换。",
+          "prediction": "改善时间局部性可能降低 DRAM 流量，即使单条指令的合并几何完全不变。"
+        }
+      ]
+    },
+    {
+      "id": "H10",
+      "kicker": "SHARED MEMORY · BANKS & LAYOUTS",
+      "question": "数据已经放进 shared，为什么转置读取仍会串行？",
+      "summary": "用明确的 bank 映射推演读取，把不同地址冲突、同地址广播、宽访问和矩阵 fragment 分开。",
+      "scope": "普通标量算例限定为 CC 5.x+ 文档描述的 32 banks、相邻 32-bit word 映射相邻 bank，并使用每 lane 4 B 访问。宽访问按指令理想处理量另算；ldmatrix 例子限定 m8n8.x1.b16。",
+      "prerequisites": [
+        "H02",
+        "H07",
+        "H09"
+      ],
+      "sources": [
+        {
+          "id": "H10-s1",
+          "title": "CUDA Best Practices：Shared Memory and Memory Banks",
+          "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#shared-memory-and-memory-banks",
+          "kind": "official",
+          "note": "官方事实；相邻 word 的 bank 映射、不同地址竞争与同地址广播，本文 padding/swizzle 算例独立推导。核对于 2026-11-07。"
+        },
+        {
+          "id": "H10-s2",
+          "title": "Nsight Compute：Shared Memory Tables / Source Metrics",
+          "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/#shared-memory",
+          "kind": "official",
+          "note": "官方计数口径；区分 requests、wavefronts、bank conflicts 及理想 wavefront。核对于 2026-11-07。"
+        },
+        {
+          "id": "H10-s3",
+          "title": "PTX ISA：Warp-level matrix load instruction ldmatrix",
+          "url": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-instructions-ldmatrix",
+          "kind": "official",
+          "note": "官方 ISA 契约；m8n8 的 row address 供给、全 warp 参与、自然对齐及 fragment 分布。较新的形状有不同架构要求，核对于 2026-11-07。"
+        },
+        {
+          "id": "H10-s4",
+          "title": "CUPTI 11.0：shared bank conflict 与 wavefront 指标映射",
+          "url": "https://docs.nvidia.com/cuda/archive/11.0_GA/cupti/Cupti/r_main.html",
+          "kind": "official",
+          "note": "官方历史指标名称出处；不是所有 GPU/NCU 都保证支持，采集前用 ncu --query-metrics 核对。核对于 2026-11-07。"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum",
+          "meaning": "shared load bank conflict 的计数；在同指令宽度与工作量下，消除冲突的布局应降低此项。",
+          "caveat": "架构相关指标；不要把 shared 总 wavefront 直接当作冲突数，也要检查 store 路径。",
+          "sourceId": "H10-s4"
+        },
+        {
+          "name": "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum",
+          "meaning": "服务 shared load 的处理波次总量；宽指令的理想波次本来就可能超过 1。",
+          "caveat": "比较相同 payload 下的 actual 与 ideal，而非仅判断绝对值是否大于请求数。",
+          "sourceId": "H10-s4"
+        },
+        {
+          "name": "MemoryWorkloadAnalysis_Tables（section）",
+          "meaning": "同时查看 Shared Memory 的 Instructions、Requests、Wavefronts 与 Bank Conflicts，连接到具体 SASS。",
+          "caveat": "计数器变化仍需结合总时间；程序可能受其他路径约束。用 ncu --list-sections 确认可用。",
+          "sourceId": "H10-s2"
+        }
+      ],
+      "walkthrough": {
+        "title": "把转置列访问从 32 次同 bank 变为 32 bank 并行",
+        "assumption": "教学模型：float tile，32 lane 分别取 tile[lane][0]；wordAddress=row×pitch+col，bank=wordAddress mod 32。比较 pitch=32 与 33；不包含 ldmatrix 或宽向量访问。",
+        "nodes": [
+          {
+            "id": "row",
+            "label": "Lane → 行",
+            "kind": "compute"
+          },
+          {
+            "id": "addr",
+            "label": "Word 地址",
+            "kind": "data"
+          },
+          {
+            "id": "bank",
+            "label": "Bank 分布",
+            "kind": "state"
+          },
+          {
+            "id": "service",
+            "label": "处理结果",
+            "kind": "data"
+          }
+        ],
+        "steps": [
+          {
+            "title": "先看无 padding 的列",
+            "explanation": "lane l 访问第 l 行第 0 列，pitch=32；每个 lane 要的都是不同数据。",
+            "active": [
+              "row",
+              "addr"
+            ],
+            "values": {
+              "row": "0…31",
+              "addr": "0,32,…,992",
+              "bank": "待映射",
+              "service": "未服务"
+            },
+            "edges": [
+              {
+                "from": "row",
+                "to": "addr",
+                "label": "row×32"
+              }
+            ]
+          },
+          {
+            "title": "取模后集中到 Bank 0",
+            "explanation": "所有 word 地址 mod 32 都是 0，但地址并不相同，因此不能当作广播。",
+            "active": [
+              "bank"
+            ],
+            "values": {
+              "row": "32 个参与者",
+              "addr": "32 个不同 word",
+              "bank": "全部 Bank 0",
+              "service": "需要分开服务"
+            },
+            "edges": [
+              {
+                "from": "addr",
+                "to": "bank",
+                "label": "mod 32"
+              }
+            ]
+          },
+          {
+            "title": "识别 32-way 冲突",
+            "explanation": "在限定的标量访问模型中，同 bank 的不同 word 需要串行处理；问题在映射而非数据依赖。",
+            "active": [
+              "service"
+            ],
+            "values": {
+              "row": "32 个参与者",
+              "addr": "不同数据",
+              "bank": "Bank 0 竞争",
+              "service": "32 份 bank 工作"
+            },
+            "edges": [
+              {
+                "from": "bank",
+                "to": "service",
+                "label": "串行服务"
+              }
+            ]
+          },
+          {
+            "title": "只把行距改为 33",
+            "explanation": "相同逻辑元素使用新地址 0,33,…,1023。额外 padding 不改变想要的矩阵值。",
+            "active": [
+              "addr"
+            ],
+            "values": {
+              "row": "0…31",
+              "addr": "0,33,…,1023",
+              "bank": "待重新映射",
+              "service": "保持相同 payload"
+            },
+            "edges": [
+              {
+                "from": "row",
+                "to": "addr",
+                "label": "row×33"
+              }
+            ]
+          },
+          {
+            "title": "每个 lane 对应不同 bank",
+            "explanation": "(33×lane) mod 32 = lane，32 个地址分散到 32 个 bank；该标量请求无需冲突拆分。",
+            "active": [
+              "bank",
+              "service"
+            ],
+            "values": {
+              "row": "32 个参与者",
+              "addr": "32 个不同 word",
+              "bank": "Bank 0…31",
+              "service": "一次并行服务"
+            },
+            "edges": [
+              {
+                "from": "addr",
+                "to": "bank",
+                "label": "不同 bank"
+              },
+              {
+                "from": "bank",
+                "to": "service",
+                "label": "并行"
+              }
+            ]
+          }
+        ]
+      },
+      "experiment": {
+        "title": "实验设计：32×32 与 32×33 的列读取（尚未执行）",
+        "change": "保持有效矩阵与工作量不变，只改变 shared 行距；比较列读取，再加入同行读取作为对照。",
+        "expect": "限定的标量列读取中，padding 后 bank 分布由集中变为分散；同行读取本来可能已无冲突。",
+        "measure": "验证输出、反汇编确认相同宽度的 LDS/STS，记录 shared load/store bank conflicts、wavefronts、shared 分配量、occupancy 与时间。",
+        "confounds": "padding 增加 shared 占用，编译器可改变指令宽度；读路径改善可能伴随写路径变化。ldmatrix 与向量访问必须按各自布局单独分析。"
+      },
+      "atoms": [
+        {
+          "id": "H10.01",
+          "question": "如何从一个 shared 地址算出 bank？",
+          "explain": [
+            "在本模块的 32-bank、4-byte word 标量模型中，bank=(byteAddress/4 的整数部分) mod 32。相邻 word 落入相邻 bank，跨过 32 个 word 后回到同一 bank。映射需要使用实际存储地址，而不是只看矩阵逻辑坐标或线程编号。",
+            "对于行主序数组，先把 row、col 与 leading dimension 转成 wordAddress，再取模。元素宽度、向量指令和矩阵 load 的参与方式会改变一次操作需要考虑的字节集合，因此这个标量公式虽有帮助，却不能单独给出所有指令的处理轮数或性能。"
+          ],
+          "example": "float tile[32][32] 中 tile[r][c] 的 wordAddress=32r+c，所以固定 c、改变 r 会保持 bank=c。",
+          "pitfall": "把 RF 的 bank 模型与 shared 混用，或把元素下标直接取模却忽略元素宽度。",
+          "check": {
+            "question": "float tile[32][33] 的 tile[7][2] 在哪个 bank？",
+            "answer": "wordAddress=7×33+2=233，233 mod 32=9。"
+          },
+          "sourceIds": [
+            "H10-s1"
+          ],
+          "state": "真实字节地址、元素宽度、bank 数与 word 粒度。",
+          "transition": "先展开实际地址，再按限定的 bank 映射计算，不先猜冲突。",
+          "prediction": "改变 leading dimension 可以在逻辑访问不变时改变 bank 分布。"
+        },
+        {
+          "id": "H10.02",
+          "question": "bank conflict 不是“多个线程同时读”这么简单？",
+          "explain": [
+            "shared 设计就是为了让不同 bank 并行服务多个线程。冲突来自同一次需并行处理的请求中，多份不同地址落到同一 bank，需求超过供给。不同 bank 的并发不是问题，同 bank 相同地址的读还可能通过广播合并，必须分别识别。",
+            "在标量模型里，可对每个 bank 统计需要的不同 word 数，用最繁忙 bank 的需求分析串行程度。但宽访问的理想拆分、指令类型及硬件处理波次需要另外考虑。优化要减少相同有效工作量下的额外 bank 工作，而不是简单减少总线程数。"
+          ],
+          "example": "lane l 读 word 2l：32 个 lane 只使用 16 个 bank，每 bank 两个不同 word；在限定模型下表现为 2-way 冲突。",
+          "pitfall": "把任何两个 lane 访问同一 bank 都认定为冲突，忽略地址相同的广播。",
+          "check": {
+            "question": "32 lane 分别读 word 0…31，会有 bank conflict 吗？",
+            "answer": "在此标量模型中没有，正好覆盖 32 个 bank。"
+          },
+          "sourceIds": [
+            "H10-s1",
+            "H10-s2"
+          ],
+          "state": "每 bank 的不同 word 请求集合及处理容量。",
+          "transition": "把同 bank 不同地址拆成可服务的轮次，同地址读按广播规则处理。",
+          "prediction": "相同字节量下，映射更均匀的布局可减少额外串行工作。"
+        },
+        {
+          "id": "H10.03",
+          "question": "同地址广播为什么不等于 32-way 冲突？",
+          "explain": [
+            "如果多个 lane 读取同一个 shared word，它们需要的是同一份数据；系统可以一次读取并把结果交给多个消费者。这与同 bank 中 32 个不同 word 完全不同：后者不能用一份值替代，需要多次获取。判断时地址身份比线程数量更关键。",
+            "广播讨论的是读。多个线程写同一位置涉及写入选择或数据竞争，不能套用读取广播来保证结果；需要 atomic 或其他合法同步协议。对更宽元素或跨 word 访问，还应按对应访问规则分析，不能仅凭指针看起来接近就把所有请求视作同一数据。"
+          ],
+          "example": "32 lane 都读 s[0] 可广播；32 lane 分别读 s[32×lane] 则是同 bank 不同 word，在本模型中需要串行服务。",
+          "pitfall": "把 shared 同地址写也称作广播，并认为每个值都会被正确保存。",
+          "check": {
+            "question": "两个 lane 读 s[0]，另两个读 s[1]，能并行服务吗？",
+            "answer": "在限定模型中可由两个不同 bank 各自广播，互不构成同 bank 不同地址冲突。"
+          },
+          "sourceIds": [
+            "H10-s1"
+          ],
+          "state": "不同 lane 到精确 word 地址的映射、操作为读还是写。",
+          "transition": "相同读地址合并服务；不同地址即使 bank 相同也必须分别取得。",
+          "prediction": "把可共享的标量读取保持为统一地址，有时能避免无谓的重复 bank 工作。"
+        },
+        {
+          "id": "H10.04",
+          "question": "宽访问为什么无冲突也可能有多个 wavefront？",
+          "explain": [
+            "一次 warp 指令可以请求大量数据，但 shared 每轮可处理的量有限。因此一条宽指令可能必须拆成多个理想处理波次，即使布局完全规整。只有超过该宽度与参与方式所要求的理想工作，才有资格进一步讨论冲突或其他处理限制。",
+            "可先用简化供给模型估算下界，再对照 NCU 的 actual 与 ideal wavefront 口径。比如每轮最多服务 32 个 4-byte word 的教学模型，32 lane 各读 16 B 共 512 B，至少需要四轮；不能看到 wavefront/request=4 就宣布发生 4-way bank conflict。真实拆分遵循具体 SASS。"
+          ],
+          "example": "把每 lane 4 B 改为 16 B，总有效数据翻四倍；处理波次增加可能只是做了更多必要工作，而非布局退化。",
+          "pitfall": "用标量 load 的一轮基线评判所有 LDS.64、LDS.128 或矩阵 load。",
+          "check": {
+            "question": "宽访问的实际波次等于理想波次，能证明 kernel 已最快吗？",
+            "answer": "不能；只说明该项没有额外波次，仍可能受管线供给、同步或其他资源限制。"
+          },
+          "sourceIds": [
+            "H10-s2",
+            "H10-s4"
+          ],
+          "state": "指令宽度、参与 lane、payload、理想处理量与实际 wavefront。",
+          "transition": "先计算必要工作下界，再检查额外拆分，而非把所有拆分归为冲突。",
+          "prediction": "适当宽化可减少指令请求数，却不减少搬运相同 payload 的必要内部工作。"
+        },
+        {
+          "id": "H10.05",
+          "question": "transpose 的列访问为什么容易碰到热点 bank？",
+          "explain": [
+            "行主序 tile 通常让一行相邻元素存储连续。若一个 warp 按列读取，lane 间的地址间隔就从一个元素变成整行跨度。当行距恰好是 bank 周期的倍数时，不同行的同列元素会映射到同一 bank，形成多个不同 word 的竞争。",
+            "因此转置问题包含两种布局目标：global 访问希望线程覆盖紧凑 sector，shared 消费希望并行访问分散到 bank。把 global 数据合并搬进 shared 只是第一步，还要安排 shared 的物理布局。逻辑矩阵转置并不强制选择一种固定的 shared 存储方式。"
+          ],
+          "example": "float tile[32][32]，lane l 读 tile[l][0]：wordAddress=32l，所有 bank 都是 0；这些数据不同，不能广播。",
+          "pitfall": "认为 shared 在片上所以任何转置顺序都同样快。",
+          "check": {
+            "question": "固定 row，lane l 读 tile[row][l]，映射有何变化？",
+            "answer": "地址连续且 bank 依 lane 变化，在此模型中可并行服务。"
+          },
+          "sourceIds": [
+            "H10-s1"
+          ],
+          "state": "矩阵行距、lane 对 row/col 的分工、实际 bank 分布。",
+          "transition": "将线程到逻辑坐标映射与坐标到存储地址映射组合后，再判定冲突。",
+          "prediction": "同一 tile 的行读取和列读取可能具有完全不同的 bank 行为。"
+        },
+        {
+          "id": "H10.06",
+          "question": "为什么加一列 padding 可以改变列访问？",
+          "explain": [
+            "padding 改变物理行距而不增加有效矩阵元素。32-bank 的 float 例中，行距 32 会让下一行回到相同 bank；行距 33 则每行相对前一行偏移一个 bank。固定列、让 lane 选择不同的行，便可把原先集中的地址分散开。",
+            "这不是“加一永远有效”的规则，而是一次模运算结果。其他元素宽度、tile 形状、向量访问和硬件布局都要重新推导。padding 还增加 shared 容量，可能减少可驻留 block；因此局部冲突计数下降后，要确认端到端时间与 occupancy 没有抵消收益。"
+          ],
+          "example": "对于 tile[32][33] 的第 0 列，bank=(33×lane) mod 32=lane，32 lane 覆盖全部 bank。",
+          "pitfall": "不计算映射就给所有 shared tile 加一列，或忽略新增 shared footprint。",
+          "check": {
+            "question": "如果行距从 32 改成 64，列访问热点消失吗？",
+            "answer": "没有；64 mod 32=0，仍落到同一 bank。"
+          },
+          "sourceIds": [
+            "H10-s1"
+          ],
+          "state": "有效形状、物理 pitch、shared 总分配量。",
+          "transition": "只改变物理 pitch，重新计算每个 lane 的 bank，并保持逻辑值对应。",
+          "prediction": "正确 padding 可改善特定访问，但也可能因容量增加降低驻留。"
+        },
+        {
+          "id": "H10.07",
+          "question": "swizzle 改的是值，还是值放置的位置？",
+          "explain": [
+            "swizzle 对逻辑坐标到物理地址的映射做确定性重排，让重要的并行访问在 bank 上更均匀。它不改变数学矩阵的值；生产者写入与消费者读取必须使用互相一致的映射。若只改一端，得到的可能是速度更快但数值错误的 kernel。",
+            "一个可推演的教学例是 32×32 个 word，物理列 c′=c XOR r。每行的列映射是置换；固定逻辑列跨行读取时，bank=c XOR r，随着 r 遍历而分散。实际 CUTLASS/CuTe 或 TMA swizzle 还有位域、粒度及指令契约，不应把此例当成通用实现。"
+          ],
+          "example": "逻辑元素 (r=3,c=5) 存到物理列 6；读取该元素也必须使用 5 XOR 3=6，不能仍读物理列 5。",
+          "pitfall": "把 swizzle 当成免费增加带宽，忽略地址计算、指令对齐与不同消费者访问需求。",
+          "check": {
+            "question": "为什么需要映射可逆或至少在有效域内一一对应？",
+            "answer": "避免不同逻辑元素意外覆盖同一位置，并保证消费者能找回正确值。"
+          },
+          "sourceIds": [
+            "H10-s1",
+            "H10-s3"
+          ],
+          "state": "逻辑坐标、物理布局函数、生产/消费一致性。",
+          "transition": "写和读使用同一布局约定；bank 分布由重排后的物理地址决定。",
+          "prediction": "同一 swizzle 可能改善一种访问，却让另一种访问更复杂。"
+        },
+        {
+          "id": "H10.08",
+          "question": "ldmatrix 的地址提供者就是对应数据的接收者吗？",
+          "explain": [
+            "以 m8n8.x1.b16 为例，warp 协作读取一个 8×8 的 16-bit 矩阵。部分 lane 提供行起始地址，而结果 fragment 分布到整个 warp 的目标寄存器；提供某一行地址与接收哪一片数据是两种不同角色，不能按普通每线程 load 的直觉逐一对应。",
+            "官方 PTX 给出了参与条件、自然对齐和 fragment 布局；该指令要求满足其全 warp 协作契约。x2/x4、trans 和新架构形状还会改变地址供给与结果布局。优化前应先逐 lane 验证坐标到寄存器的映射，再研究 bank 和吞吐，避免把错误重排误认为高性能。"
+          ],
+          "example": "在非 trans 的 m8n8.x1.b16 中，每行由连续四个 lane 分担，两列 16-bit 元素装入一个 32-bit fragment；lane 0…7 提供八个行地址。",
+          "pitfall": "把 .aligned 仅理解成内存地址对齐，忽略它对一致参与的要求。",
+          "check": {
+            "question": "只有 lane 0…7 提供行地址，是否只有它们需要执行 ldmatrix？",
+            "answer": "不是；行地址提供者是子集，但指令仍按全 warp 的协作契约执行。"
+          },
+          "sourceIds": [
+            "H10-s3"
+          ],
+          "state": "矩阵形状、地址提供 lane、所有参与 lane、fragment 位置。",
+          "transition": "按 ISA 的地址供给与分发规则读取；先验证布局，再测 bank/指令成本。",
+          "prediction": "正确的 shared swizzle 必须与 ldmatrix 的地址和 fragment 契约共同设计。"
+        }
+      ]
+    }
+  ]
+}
