@@ -1,0 +1,2889 @@
+{
+  "version": "0.3",
+  "title": "GPU 系统与推理优化 · 软件与硬件学习地图",
+  "updated": "2026-11-07",
+  "policy": "保留既有主题编号。新增小点追加编号，不以目录完成度冒充课程内容完成度。每节以一个问题、最小模型、单变量对照、观测证据与预测题组织。",
+  "taxonomyReference": {
+    "url": "https://modal.com/gpu-glossary/device-hardware/streaming-multiprocessor",
+    "scope": "仅参考导航中的 topics 与分类，不引用正文解释作为知识依据",
+    "categories": [
+      "Device Hardware",
+      "Device Software",
+      "Host Software",
+      "Performance"
+    ]
+  },
+  "contentEvidence": [
+    "NVIDIA 官方文档与 PTX ISA",
+    "Accel-Sim / GPGPU-Sim 源码",
+    "原始微基准论文",
+    "CUDA / CUTLASS / Triton / PyTorch / vLLM / llama.cpp 等项目源码"
+  ],
+  "routes": [
+    {
+      "id": "route-launch",
+      "title": "一次 CUDA 调用如何到达 SM",
+      "question": "从 host 调用到设备指令开始执行，中间经过哪些层？",
+      "modules": [
+        "S01",
+        "C01",
+        "S03",
+        "D01",
+        "H02",
+        "H20",
+        "P03"
+      ]
+    },
+    {
+      "id": "route-issue",
+      "title": "为什么这一周期发不出指令",
+      "question": "把线程配置、编译产生的依赖与 scheduler 状态对应起来。",
+      "modules": [
+        "D01",
+        "C02",
+        "H03",
+        "H04",
+        "H06",
+        "H07",
+        "P02"
+      ]
+    },
+    {
+      "id": "route-memory",
+      "title": "一个 Tensor 布局如何变成访存流量",
+      "question": "从 shape / stride 一直追到 sector、bank、cache 和在途请求。",
+      "modules": [
+        "F01",
+        "D02",
+        "C03",
+        "H09",
+        "H10",
+        "H11",
+        "H12",
+        "P01",
+        "P02"
+      ]
+    },
+    {
+      "id": "route-tensor",
+      "title": "搬运与 Tensor Core 计算如何重叠",
+      "question": "把 buffer 所有权、指令完成条件和硬件流水线连起来。",
+      "modules": [
+        "D03",
+        "C03",
+        "H17",
+        "H18",
+        "H19",
+        "P02"
+      ]
+    },
+    {
+      "id": "route-serving",
+      "title": "kernel 很快，推理为什么仍然慢",
+      "question": "把框架调度、内存管理、launch gap、通信与端到端时间对应起来。",
+      "modules": [
+        "F02",
+        "F03",
+        "F04",
+        "S02",
+        "S03",
+        "H20",
+        "P03"
+      ]
+    },
+    {
+      "id": "route-lowbit",
+      "title": "低比特为什么没有等比例提速",
+      "question": "从量化表示到解包、数据搬运和实际 kernel，定位省下与新增的开销。",
+      "modules": [
+        "Q01",
+        "Q06",
+        "R01",
+        "H08",
+        "H09",
+        "H17",
+        "P02"
+      ]
+    },
+    {
+      "id": "route-spec",
+      "title": "投机接受率高，为什么仍然慢",
+      "question": "把候选生成、验证、状态提交和框架调度放在同一条时间线上。",
+      "modules": [
+        "T01",
+        "T05",
+        "R04",
+        "R02",
+        "S02",
+        "P03"
+      ]
+    },
+    {
+      "id": "route-impact",
+      "title": "一个优化如何成为可复现的项目成果",
+      "question": "用独立正确性、统一 baseline 和完整实验记录支撑公开结论。",
+      "modules": [
+        "R03",
+        "R01",
+        "R02",
+        "H01",
+        "P03"
+      ]
+    }
+  ],
+  "demo": {
+    "title": "Warp scheduler · 10 个交互示例",
+    "status": "available",
+    "note": "当前可用的是已有单步演示；目录其余主题逐节补齐。",
+    "topicLinks": [
+      "H02.02",
+      "H04.01",
+      "H04.02",
+      "H04.04",
+      "H04.05",
+      "H04.06",
+      "H04.07",
+      "H04.08",
+      "H04.10",
+      "H01.08"
+    ]
+  },
+  "tracks": [
+    {
+      "id": "H",
+      "title": "Device Hardware · 硬件与底层行为",
+      "description": "保留已确定的 20 个模块及其顺序，补充 TPC/GPC 和 Core 计数口径。相关软件主题按模块互相引用。",
+      "modules": [
+        {
+          "id": "H01",
+          "title": "测量与证据",
+          "topics": [
+            {
+              "id": "H01.01",
+              "title": "PTX 与最终 SASS 的关系",
+              "status": "planned"
+            },
+            {
+              "id": "H01.02",
+              "title": "用依赖链测指令延迟",
+              "status": "planned"
+            },
+            {
+              "id": "H01.03",
+              "title": "用独立指令流测吞吐",
+              "status": "planned"
+            },
+            {
+              "id": "H01.04",
+              "title": "编译器优化如何破坏微基准",
+              "status": "planned"
+            },
+            {
+              "id": "H01.05",
+              "title": "时钟、预热和缓存状态如何影响结果",
+              "status": "planned"
+            },
+            {
+              "id": "H01.06",
+              "title": "NCU 的 active / elapsed 归一口径",
+              "status": "planned"
+            },
+            {
+              "id": "H01.07",
+              "title": "采样、replay 与测量扰动",
+              "status": "planned"
+            },
+            {
+              "id": "H01.08",
+              "title": "模拟器结果如何与硬件校准",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "C01",
+            "P02",
+            "P03"
+          ]
+        },
+        {
+          "id": "H02",
+          "title": "执行层次与 SIMT",
+          "topics": [
+            {
+              "id": "H02.01",
+              "title": "一个线程有哪些独立状态",
+              "status": "planned"
+            },
+            {
+              "id": "H02.02",
+              "title": "warp 指令与参与线程的关系",
+              "status": "planned"
+            },
+            {
+              "id": "H02.03",
+              "title": "active mask 如何改变执行",
+              "status": "planned"
+            },
+            {
+              "id": "H02.04",
+              "title": "逻辑 lane 与物理执行宽度",
+              "status": "planned"
+            },
+            {
+              "id": "H02.05",
+              "title": "CTA、warp、SM 的归属关系",
+              "status": "planned"
+            },
+            {
+              "id": "H02.06",
+              "title": "SM 子分区及资源共享边界",
+              "status": "planned"
+            },
+            {
+              "id": "H02.07",
+              "title": "block 到 SM 的分配",
+              "status": "planned"
+            },
+            {
+              "id": "H02.08",
+              "title": "TPC / GPC 在整卡层次中的位置",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D01",
+            "S01",
+            "P02"
+          ]
+        },
+        {
+          "id": "H03",
+          "title": "资源分配与驻留",
+          "topics": [
+            {
+              "id": "H03.01",
+              "title": "block 进入 SM 需要哪些资源",
+              "status": "planned"
+            },
+            {
+              "id": "H03.02",
+              "title": "寄存器容量如何限制驻留",
+              "status": "planned"
+            },
+            {
+              "id": "H03.03",
+              "title": "寄存器分配粒度造成的台阶",
+              "status": "planned"
+            },
+            {
+              "id": "H03.04",
+              "title": "shared memory 如何限制驻留",
+              "status": "planned"
+            },
+            {
+              "id": "H03.05",
+              "title": "thread / warp / block 数量上限",
+              "status": "planned"
+            },
+            {
+              "id": "H03.06",
+              "title": "不满一个 warp 的线程块",
+              "status": "planned"
+            },
+            {
+              "id": "H03.07",
+              "title": "theoretical 与 achieved occupancy",
+              "status": "planned"
+            },
+            {
+              "id": "H03.08",
+              "title": "block 生命周期与尾部效应",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D01",
+            "C02",
+            "P02"
+          ]
+        },
+        {
+          "id": "H04",
+          "title": "Warp scheduler",
+          "topics": [
+            {
+              "id": "H04.01",
+              "title": "scheduler 管理哪些 warp",
+              "status": "planned"
+            },
+            {
+              "id": "H04.02",
+              "title": "resident 到 eligible 的条件",
+              "status": "planned"
+            },
+            {
+              "id": "H04.03",
+              "title": "eligible 到 selected 的选择",
+              "status": "planned"
+            },
+            {
+              "id": "H04.04",
+              "title": "issue 与完成的区别",
+              "status": "planned"
+            },
+            {
+              "id": "H04.05",
+              "title": "LRR 策略",
+              "status": "planned"
+            },
+            {
+              "id": "H04.06",
+              "title": "GTO 策略",
+              "status": "planned"
+            },
+            {
+              "id": "H04.07",
+              "title": "跨 warp 隐藏延迟",
+              "status": "planned"
+            },
+            {
+              "id": "H04.08",
+              "title": "warp 内 ILP",
+              "status": "planned"
+            },
+            {
+              "id": "H04.09",
+              "title": "多发射的资源约束",
+              "status": "planned"
+            },
+            {
+              "id": "H04.10",
+              "title": "not_selected 应如何解释",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D01",
+            "C02",
+            "P02"
+          ]
+        },
+        {
+          "id": "H05",
+          "title": "取指与控制流",
+          "topics": [
+            {
+              "id": "H05.01",
+              "title": "PC 如何决定下一条指令",
+              "status": "planned"
+            },
+            {
+              "id": "H05.02",
+              "title": "instruction cache miss",
+              "status": "planned"
+            },
+            {
+              "id": "H05.03",
+              "title": "指令缓冲不足",
+              "status": "planned"
+            },
+            {
+              "id": "H05.04",
+              "title": "分支发散与活动掩码",
+              "status": "planned"
+            },
+            {
+              "id": "H05.05",
+              "title": "分支汇合的机制与模型",
+              "status": "planned"
+            },
+            {
+              "id": "H05.06",
+              "title": "predication 与分支的取舍",
+              "status": "planned"
+            },
+            {
+              "id": "H05.07",
+              "title": "Independent Thread Scheduling",
+              "status": "planned"
+            },
+            {
+              "id": "H05.08",
+              "title": "循环展开导致的指令体积增长",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D01",
+            "C02",
+            "P02"
+          ]
+        },
+        {
+          "id": "H06",
+          "title": "依赖跟踪与 SASS 控制",
+          "topics": [
+            {
+              "id": "H06.01",
+              "title": "RAW 依赖",
+              "status": "planned"
+            },
+            {
+              "id": "H06.02",
+              "title": "WAW 依赖",
+              "status": "planned"
+            },
+            {
+              "id": "H06.03",
+              "title": "WAR 风险与操作数读取时刻",
+              "status": "planned"
+            },
+            {
+              "id": "H06.04",
+              "title": "模拟器 scoreboard 的预留和释放",
+              "status": "planned"
+            },
+            {
+              "id": "H06.05",
+              "title": "固定延迟指令的 stall 控制",
+              "status": "planned"
+            },
+            {
+              "id": "H06.06",
+              "title": "可变延迟操作的依赖 barrier",
+              "status": "planned"
+            },
+            {
+              "id": "H06.07",
+              "title": "wait mask 如何等待生产者",
+              "status": "planned"
+            },
+            {
+              "id": "H06.08",
+              "title": "yield 控制信息",
+              "status": "planned"
+            },
+            {
+              "id": "H06.09",
+              "title": "wait、long_scoreboard、short_scoreboard 的区别",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "C01",
+            "C02",
+            "P02"
+          ]
+        },
+        {
+          "id": "H07",
+          "title": "寄存器与操作数读取",
+          "topics": [
+            {
+              "id": "H07.01",
+              "title": "逻辑寄存器到物理 RF 的关系",
+              "status": "planned"
+            },
+            {
+              "id": "H07.02",
+              "title": "RF 的分区与 bank",
+              "status": "planned"
+            },
+            {
+              "id": "H07.03",
+              "title": "同 bank 操作数竞争",
+              "status": "planned"
+            },
+            {
+              "id": "H07.04",
+              "title": "读端口带宽限制",
+              "status": "planned"
+            },
+            {
+              "id": "H07.05",
+              "title": "operand collector 如何收集操作数",
+              "status": "planned"
+            },
+            {
+              "id": "H07.06",
+              "title": "多条指令之间的读取仲裁",
+              "status": "planned"
+            },
+            {
+              "id": "H07.07",
+              "title": "operand reuse 的作用",
+              "status": "planned"
+            },
+            {
+              "id": "H07.08",
+              "title": "写回端口与结果竞争",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D02",
+            "C02",
+            "C03"
+          ]
+        },
+        {
+          "id": "H08",
+          "title": "执行流水线",
+          "topics": [
+            {
+              "id": "H08.01",
+              "title": "latency 与 initiation interval",
+              "status": "planned"
+            },
+            {
+              "id": "H08.02",
+              "title": "指令发射与执行入口接收",
+              "status": "planned"
+            },
+            {
+              "id": "H08.03",
+              "title": "FP32 / INT 指令的资源映射",
+              "status": "planned"
+            },
+            {
+              "id": "H08.04",
+              "title": "SFU 指令的吞吐限制",
+              "status": "planned"
+            },
+            {
+              "id": "H08.05",
+              "title": "多种指令如何竞争共享路径",
+              "status": "planned"
+            },
+            {
+              "id": "H08.06",
+              "title": "类型转换与数据解包的执行成本",
+              "status": "planned"
+            },
+            {
+              "id": "H08.07",
+              "title": "pipeline 饱和后增加 warp 的效果",
+              "status": "planned"
+            },
+            {
+              "id": "H08.08",
+              "title": "指令混合如何改变瓶颈",
+              "status": "planned"
+            },
+            {
+              "id": "H08.09",
+              "title": "Core / CUDA Core 的计数口径与执行资源",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "C02",
+            "C03",
+            "P01"
+          ]
+        },
+        {
+          "id": "H09",
+          "title": "LSU 与全局访存合并",
+          "topics": [
+            {
+              "id": "H09.01",
+              "title": "从线程地址生成访存请求",
+              "status": "planned"
+            },
+            {
+              "id": "H09.02",
+              "title": "对齐访问需要多少 sector",
+              "status": "planned"
+            },
+            {
+              "id": "H09.03",
+              "title": "跨边界访问增加多少流量",
+              "status": "planned"
+            },
+            {
+              "id": "H09.04",
+              "title": "stride 对请求数量的影响",
+              "status": "planned"
+            },
+            {
+              "id": "H09.05",
+              "title": "gather 的地址分布",
+              "status": "planned"
+            },
+            {
+              "id": "H09.06",
+              "title": "向量化 load 改变了什么",
+              "status": "planned"
+            },
+            {
+              "id": "H09.07",
+              "title": "部分 lane 参与时的请求效率",
+              "status": "planned"
+            },
+            {
+              "id": "H09.08",
+              "title": "useful bytes 与实际传输字节",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D02",
+            "C03",
+            "F01",
+            "P02"
+          ]
+        },
+        {
+          "id": "H10",
+          "title": "Shared memory",
+          "topics": [
+            {
+              "id": "H10.01",
+              "title": "地址到 bank 的映射",
+              "status": "planned"
+            },
+            {
+              "id": "H10.02",
+              "title": "bank conflict 如何产生",
+              "status": "planned"
+            },
+            {
+              "id": "H10.03",
+              "title": "同地址读取与广播",
+              "status": "planned"
+            },
+            {
+              "id": "H10.04",
+              "title": "宽访问如何拆成多个处理波次",
+              "status": "planned"
+            },
+            {
+              "id": "H10.05",
+              "title": "transpose 为什么容易冲突",
+              "status": "planned"
+            },
+            {
+              "id": "H10.06",
+              "title": "padding 如何改变映射",
+              "status": "planned"
+            },
+            {
+              "id": "H10.07",
+              "title": "swizzle 如何重排访问",
+              "status": "planned"
+            },
+            {
+              "id": "H10.08",
+              "title": "ldmatrix 的线程地址与数据布局",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D02",
+            "C03",
+            "P02"
+          ]
+        },
+        {
+          "id": "H11",
+          "title": "缓存体系",
+          "topics": [
+            {
+              "id": "H11.01",
+              "title": "cache line 与 sector",
+              "status": "planned"
+            },
+            {
+              "id": "H11.02",
+              "title": "tag 查找与数据访问",
+              "status": "planned"
+            },
+            {
+              "id": "H11.03",
+              "title": "set / way 与冲突失效",
+              "status": "planned"
+            },
+            {
+              "id": "H11.04",
+              "title": "容量失效与工作集",
+              "status": "planned"
+            },
+            {
+              "id": "H11.05",
+              "title": "L1 与 shared memory carveout",
+              "status": "planned"
+            },
+            {
+              "id": "H11.06",
+              "title": "L1、L2 命中分别省掉哪段路径",
+              "status": "planned"
+            },
+            {
+              "id": "H11.07",
+              "title": "cache operator 的作用边界",
+              "status": "planned"
+            },
+            {
+              "id": "H11.08",
+              "title": "L2 persistence 与驱逐优先级",
+              "status": "planned"
+            },
+            {
+              "id": "H11.09",
+              "title": "constant cache 的广播与地址分散",
+              "status": "planned"
+            },
+            {
+              "id": "H11.10",
+              "title": "命中率高但性能仍差的原因",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D02",
+            "S03",
+            "F02",
+            "P02"
+          ]
+        },
+        {
+          "id": "H12",
+          "title": "访存并发、队列与反压",
+          "topics": [
+            {
+              "id": "H12.01",
+              "title": "load 发射与数据返回",
+              "status": "planned"
+            },
+            {
+              "id": "H12.02",
+              "title": "未完成 miss 的跟踪项与 MSHR 模型",
+              "status": "planned"
+            },
+            {
+              "id": "H12.03",
+              "title": "多个请求如何合并等待",
+              "status": "planned"
+            },
+            {
+              "id": "H12.04",
+              "title": "miss 跟踪资源耗尽",
+              "status": "planned"
+            },
+            {
+              "id": "H12.05",
+              "title": "LSU 队列满如何阻止后续发射",
+              "status": "planned"
+            },
+            {
+              "id": "H12.06",
+              "title": "一个 warp 如何提供多条独立访存",
+              "status": "planned"
+            },
+            {
+              "id": "H12.07",
+              "title": "需要多少在途字节才能填满带宽",
+              "status": "planned"
+            },
+            {
+              "id": "H12.08",
+              "title": "store 排空与 kernel 尾部",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "C02",
+            "C03",
+            "P01",
+            "P02"
+          ]
+        },
+        {
+          "id": "H13",
+          "title": "片内互连与 DRAM/HBM",
+          "topics": [
+            {
+              "id": "H13.01",
+              "title": "地址如何分布到内存分区",
+              "status": "planned"
+            },
+            {
+              "id": "H13.02",
+              "title": "partition camping",
+              "status": "planned"
+            },
+            {
+              "id": "H13.03",
+              "title": "SM 到 L2 的互连竞争",
+              "status": "planned"
+            },
+            {
+              "id": "H13.04",
+              "title": "下游阻塞如何向上游传播",
+              "status": "planned"
+            },
+            {
+              "id": "H13.05",
+              "title": "channel / pseudo-channel / bank 的并行性",
+              "status": "planned"
+            },
+            {
+              "id": "H13.06",
+              "title": "row hit 与 row conflict",
+              "status": "planned"
+            },
+            {
+              "id": "H13.07",
+              "title": "ACT、READ/WRITE、PRE 的时序",
+              "status": "planned"
+            },
+            {
+              "id": "H13.08",
+              "title": "读写切换与 refresh",
+              "status": "planned"
+            },
+            {
+              "id": "H13.09",
+              "title": "内存控制器调度策略",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D02",
+            "F04",
+            "P01"
+          ]
+        },
+        {
+          "id": "H14",
+          "title": "地址翻译与虚拟内存",
+          "topics": [
+            {
+              "id": "H14.01",
+              "title": "虚拟地址到物理地址的路径",
+              "status": "planned"
+            },
+            {
+              "id": "H14.02",
+              "title": "TLB 命中与失效",
+              "status": "planned"
+            },
+            {
+              "id": "H14.03",
+              "title": "TLB reach 与工作集",
+              "status": "planned"
+            },
+            {
+              "id": "H14.04",
+              "title": "跨页访问的影响",
+              "status": "planned"
+            },
+            {
+              "id": "H14.05",
+              "title": "页大小与翻译压力",
+              "status": "planned"
+            },
+            {
+              "id": "H14.06",
+              "title": "page fault 与数据迁移",
+              "status": "planned"
+            },
+            {
+              "id": "H14.07",
+              "title": "Unified Memory 中数据位置的影响",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "S01",
+            "S03",
+            "F02"
+          ]
+        },
+        {
+          "id": "H15",
+          "title": "同步与内存顺序",
+          "topics": [
+            {
+              "id": "H15.01",
+              "title": "warp 内同步及参与掩码",
+              "status": "planned"
+            },
+            {
+              "id": "H15.02",
+              "title": "CTA barrier 的到达与等待",
+              "status": "planned"
+            },
+            {
+              "id": "H15.03",
+              "title": "到达时间不均造成的等待",
+              "status": "planned"
+            },
+            {
+              "id": "H15.04",
+              "title": "原子性、可见性、顺序性的区别",
+              "status": "planned"
+            },
+            {
+              "id": "H15.05",
+              "title": "block / device / system scope",
+              "status": "planned"
+            },
+            {
+              "id": "H15.06",
+              "title": "release / acquire 的发布—消费关系",
+              "status": "planned"
+            },
+            {
+              "id": "H15.07",
+              "title": "fence 与执行同步的职责",
+              "status": "planned"
+            },
+            {
+              "id": "H15.08",
+              "title": "跨 block 自旋同步的进展与死锁问题",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D03",
+            "S02",
+            "C03"
+          ]
+        },
+        {
+          "id": "H16",
+          "title": "原子操作硬件行为",
+          "topics": [
+            {
+              "id": "H16.01",
+              "title": "atomic read-modify-write 的逻辑过程",
+              "status": "planned"
+            },
+            {
+              "id": "H16.02",
+              "title": "多线程竞争同一地址",
+              "status": "planned"
+            },
+            {
+              "id": "H16.03",
+              "title": "地址分布如何影响竞争",
+              "status": "planned"
+            },
+            {
+              "id": "H16.04",
+              "title": "shared 与 global atomic 的执行路径",
+              "status": "planned"
+            },
+            {
+              "id": "H16.05",
+              "title": "返回旧值与不需要返回值的区别",
+              "status": "planned"
+            },
+            {
+              "id": "H16.06",
+              "title": "CAS 重试",
+              "status": "planned"
+            },
+            {
+              "id": "H16.07",
+              "title": "warp 聚合如何减少原子请求",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D03",
+            "C03",
+            "P02"
+          ]
+        },
+        {
+          "id": "H17",
+          "title": "Tensor Core 基础",
+          "topics": [
+            {
+              "id": "H17.01",
+              "title": "一条 MMA 的逻辑计算",
+              "status": "planned"
+            },
+            {
+              "id": "H17.02",
+              "title": "collective 指令的参与线程",
+              "status": "planned"
+            },
+            {
+              "id": "H17.03",
+              "title": "matrix fragment 在线程间的分布",
+              "status": "planned"
+            },
+            {
+              "id": "H17.04",
+              "title": "操作数搬运与布局要求",
+              "status": "planned"
+            },
+            {
+              "id": "H17.05",
+              "title": "accumulator 依赖链",
+              "status": "planned"
+            },
+            {
+              "id": "H17.06",
+              "title": "指令形状与有效计算利用率",
+              "status": "planned"
+            },
+            {
+              "id": "H17.07",
+              "title": "数据类型与累加精度",
+              "status": "planned"
+            },
+            {
+              "id": "H17.08",
+              "title": "结构化稀疏及元数据",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D03",
+            "C03",
+            "F02",
+            "P02"
+          ]
+        },
+        {
+          "id": "H18",
+          "title": "异步搬运与流水化",
+          "topics": [
+            {
+              "id": "H18.01",
+              "title": "普通 load/store 与 cp.async 的数据路径",
+              "status": "planned"
+            },
+            {
+              "id": "H18.02",
+              "title": "async copy 的发起与完成",
+              "status": "planned"
+            },
+            {
+              "id": "H18.03",
+              "title": "commit group",
+              "status": "planned"
+            },
+            {
+              "id": "H18.04",
+              "title": "wait group",
+              "status": "planned"
+            },
+            {
+              "id": "H18.05",
+              "title": "双缓冲的所有权切换",
+              "status": "planned"
+            },
+            {
+              "id": "H18.06",
+              "title": "多 stage 的延迟隐藏与资源代价",
+              "status": "planned"
+            },
+            {
+              "id": "H18.07",
+              "title": "mbarrier 的 arrival、phase 与完成条件",
+              "status": "planned"
+            },
+            {
+              "id": "H18.08",
+              "title": "不同访问 proxy 之间的顺序",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D03",
+            "C03",
+            "P02"
+          ]
+        },
+        {
+          "id": "H19",
+          "title": "Hopper / Blackwell 专题",
+          "topics": [
+            {
+              "id": "H19.01",
+              "title": "TMA tensor map 与地址生成",
+              "status": "planned"
+            },
+            {
+              "id": "H19.02",
+              "title": "TMA 完成与消费者等待",
+              "status": "planned"
+            },
+            {
+              "id": "H19.03",
+              "title": "TMA multicast",
+              "status": "planned"
+            },
+            {
+              "id": "H19.04",
+              "title": "WGMMA 的发起、提交和等待",
+              "status": "planned"
+            },
+            {
+              "id": "H19.05",
+              "title": "warp specialization",
+              "status": "planned"
+            },
+            {
+              "id": "H19.06",
+              "title": "setmaxnreg 的寄存器资源调整",
+              "status": "planned"
+            },
+            {
+              "id": "H19.07",
+              "title": "cluster 驻留与 DSM",
+              "status": "planned"
+            },
+            {
+              "id": "H19.08",
+              "title": "SM100 Tensor Memory",
+              "status": "planned"
+            },
+            {
+              "id": "H19.09",
+              "title": "tcgen05.mma",
+              "status": "planned"
+            },
+            {
+              "id": "H19.10",
+              "title": "支持的双 CTA 协作模式",
+              "status": "planned"
+            },
+            {
+              "id": "H19.11",
+              "title": "Cluster Launch Control",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D03",
+            "C03",
+            "P02"
+          ]
+        },
+        {
+          "id": "H20",
+          "title": "整卡执行与系统边界",
+          "topics": [
+            {
+              "id": "H20.01",
+              "title": "kernel 提交与设备端开始执行",
+              "status": "planned"
+            },
+            {
+              "id": "H20.02",
+              "title": "grid 波次与 SM 分配",
+              "status": "planned"
+            },
+            {
+              "id": "H20.03",
+              "title": "并发 kernel 的资源竞争",
+              "status": "planned"
+            },
+            {
+              "id": "H20.04",
+              "title": "copy engine 与计算重叠",
+              "status": "planned"
+            },
+            {
+              "id": "H20.05",
+              "title": "PCIe / NVLink 的延迟与带宽",
+              "status": "planned"
+            },
+            {
+              "id": "H20.06",
+              "title": "P2P 远端访问路径",
+              "status": "planned"
+            },
+            {
+              "id": "H20.07",
+              "title": "MIG / MPS 的资源边界",
+              "status": "planned"
+            },
+            {
+              "id": "H20.08",
+              "title": "功耗、频率与持续性能",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "S01",
+            "S02",
+            "F04",
+            "P03"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "D",
+      "title": "Device Software · 设备端编程模型",
+      "description": "参考 glossary 的线程、内存与 tile 主题，学习软件契约如何映射到硬件。",
+      "modules": [
+        {
+          "id": "D01",
+          "title": "Kernel 与线程组织",
+          "topics": [
+            {
+              "id": "D01.01",
+              "title": "一个 kernel 的参数如何传给设备",
+              "status": "planned"
+            },
+            {
+              "id": "D01.02",
+              "title": "threadIdx / blockIdx 如何映射数据",
+              "status": "planned"
+            },
+            {
+              "id": "D01.03",
+              "title": "blockDim / gridDim 如何决定覆盖范围",
+              "status": "planned"
+            },
+            {
+              "id": "D01.04",
+              "title": "CTA 与 thread block 的术语对应",
+              "status": "planned"
+            },
+            {
+              "id": "D01.05",
+              "title": "warp 内协作的参与线程条件",
+              "status": "planned"
+            },
+            {
+              "id": "D01.06",
+              "title": "warpgroup 协作的参与条件",
+              "status": "planned"
+            },
+            {
+              "id": "D01.07",
+              "title": "grid-stride loop 的工作分配",
+              "status": "planned"
+            },
+            {
+              "id": "D01.08",
+              "title": "Compute Capability 如何约束可用特性",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H02",
+            "H03",
+            "H04"
+          ]
+        },
+        {
+          "id": "D02",
+          "title": "地址空间、Tensor 与布局",
+          "topics": [
+            {
+              "id": "D02.01",
+              "title": "软件寄存器变量的生命周期",
+              "status": "planned"
+            },
+            {
+              "id": "D02.02",
+              "title": "local memory 与 spill 的关系",
+              "status": "planned"
+            },
+            {
+              "id": "D02.03",
+              "title": "shared memory 的静态和动态分配",
+              "status": "planned"
+            },
+            {
+              "id": "D02.04",
+              "title": "global memory 的指针与访问边界",
+              "status": "planned"
+            },
+            {
+              "id": "D02.05",
+              "title": "Tensor shape、stride 与 storage offset",
+              "status": "planned"
+            },
+            {
+              "id": "D02.06",
+              "title": "view / transpose 何时需要真实搬运",
+              "status": "planned"
+            },
+            {
+              "id": "D02.07",
+              "title": "线程到数据的映射如何决定访存合并",
+              "status": "planned"
+            },
+            {
+              "id": "D02.08",
+              "title": "对齐条件如何影响向量访问",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H07",
+            "H09",
+            "H10",
+            "H11",
+            "F01"
+          ]
+        },
+        {
+          "id": "D03",
+          "title": "协作、同步与 Tile 编程",
+          "topics": [
+            {
+              "id": "D03.01",
+              "title": "warp intrinsic 的 mask 契约",
+              "status": "planned"
+            },
+            {
+              "id": "D03.02",
+              "title": "Cooperative Groups 的分组与作用域",
+              "status": "planned"
+            },
+            {
+              "id": "D03.03",
+              "title": "barrier 的 arrive / wait 分离",
+              "status": "planned"
+            },
+            {
+              "id": "D03.04",
+              "title": "原子操作的 order 与 scope 选择",
+              "status": "planned"
+            },
+            {
+              "id": "D03.05",
+              "title": "tile 计算如何分配到线程组",
+              "status": "planned"
+            },
+            {
+              "id": "D03.06",
+              "title": "tile 的加载、计算、存储职责",
+              "status": "planned"
+            },
+            {
+              "id": "D03.07",
+              "title": "异步 copy 的 buffer 所有权",
+              "status": "planned"
+            },
+            {
+              "id": "D03.08",
+              "title": "MMA 等 collective 指令的参与约束",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H15",
+            "H16",
+            "H17",
+            "H18",
+            "H19"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S",
+      "title": "Host Software · Runtime、Driver 与系统接口",
+      "description": "连接 CUDA 软件平台、Runtime/Driver API、操作系统驱动和主机端编排。",
+      "modules": [
+        {
+          "id": "S01",
+          "title": "CUDA 软件栈与驱动边界",
+          "topics": [
+            {
+              "id": "S01.01",
+              "title": "CUDA Toolkit、Runtime 与 Driver 的职责",
+              "status": "planned"
+            },
+            {
+              "id": "S01.02",
+              "title": "Runtime API 与 Driver API 的调用边界",
+              "status": "planned"
+            },
+            {
+              "id": "S01.03",
+              "title": "libcudart 与 libcuda 的关系",
+              "status": "planned"
+            },
+            {
+              "id": "S01.04",
+              "title": "GPU 用户态驱动与内核态驱动的边界",
+              "status": "planned"
+            },
+            {
+              "id": "S01.05",
+              "title": "nvidia.ko 所处的操作系统层次",
+              "status": "planned"
+            },
+            {
+              "id": "S01.06",
+              "title": "CUDA context 的所有权",
+              "status": "planned"
+            },
+            {
+              "id": "S01.07",
+              "title": "primary context 的共享",
+              "status": "planned"
+            },
+            {
+              "id": "S01.08",
+              "title": "NVML 与 nvidia-smi 的观测范围",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H14",
+            "H20",
+            "P03"
+          ]
+        },
+        {
+          "id": "S02",
+          "title": "提交、Stream、Event 与 Graph",
+          "topics": [
+            {
+              "id": "S02.01",
+              "title": "一次 kernel launch 的主机端过程",
+              "status": "planned"
+            },
+            {
+              "id": "S02.02",
+              "title": "同一 stream 的顺序保证",
+              "status": "planned"
+            },
+            {
+              "id": "S02.03",
+              "title": "不同 stream 的依赖表达",
+              "status": "planned"
+            },
+            {
+              "id": "S02.04",
+              "title": "event record 与 wait 的位置",
+              "status": "planned"
+            },
+            {
+              "id": "S02.05",
+              "title": "隐式同步从哪里出现",
+              "status": "planned"
+            },
+            {
+              "id": "S02.06",
+              "title": "异步错误何时被报告",
+              "status": "planned"
+            },
+            {
+              "id": "S02.07",
+              "title": "CUDA Graph 的 capture、instantiate 与 replay",
+              "status": "planned"
+            },
+            {
+              "id": "S02.08",
+              "title": "Graph replay 的地址和形状约束",
+              "status": "planned"
+            },
+            {
+              "id": "S02.09",
+              "title": "CPU launch overhead 与 GPU 执行时间的分离",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H20",
+            "F02",
+            "P03"
+          ]
+        },
+        {
+          "id": "S03",
+          "title": "模块、内存与资源生命周期",
+          "topics": [
+            {
+              "id": "S03.01",
+              "title": "module / function 的加载与查找",
+              "status": "planned"
+            },
+            {
+              "id": "S03.02",
+              "title": "device memory 的分配与释放",
+              "status": "planned"
+            },
+            {
+              "id": "S03.03",
+              "title": "stream-ordered allocation 与 memory pool",
+              "status": "planned"
+            },
+            {
+              "id": "S03.04",
+              "title": "pinned host memory 的用途",
+              "status": "planned"
+            },
+            {
+              "id": "S03.05",
+              "title": "H2D / D2H copy 的异步条件",
+              "status": "planned"
+            },
+            {
+              "id": "S03.06",
+              "title": "Unified Memory 的使用边界",
+              "status": "planned"
+            },
+            {
+              "id": "S03.07",
+              "title": "虚拟地址保留与物理内存映射",
+              "status": "planned"
+            },
+            {
+              "id": "S03.08",
+              "title": "框架 allocator 如何复用设备内存",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H14",
+            "D02",
+            "F01",
+            "P03"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "title": "Compiler & Kernel Engineering · 编译与内核工程",
+      "description": "在 glossary 的 nvcc、NVRTC、SASS/PTX、CUTLASS/CuTe 主题上，加入 Triton 和实际 kernel 优化。",
+      "modules": [
+        {
+          "id": "C01",
+          "title": "从源码到可执行代码",
+          "topics": [
+            {
+              "id": "C01.01",
+              "title": "nvcc 如何分离 host 与 device 编译",
+              "status": "planned"
+            },
+            {
+              "id": "C01.02",
+              "title": "PTX 到 SASS 的生成阶段",
+              "status": "planned"
+            },
+            {
+              "id": "C01.03",
+              "title": "ptxas 的寄存器分配报告",
+              "status": "planned"
+            },
+            {
+              "id": "C01.04",
+              "title": "cubin、fatbin 与 PTX 的角色",
+              "status": "planned"
+            },
+            {
+              "id": "C01.05",
+              "title": "目标架构与 gencode 的选择",
+              "status": "planned"
+            },
+            {
+              "id": "C01.06",
+              "title": "NVRTC 的运行时编译入口",
+              "status": "planned"
+            },
+            {
+              "id": "C01.07",
+              "title": "Driver JIT 的触发与缓存",
+              "status": "planned"
+            },
+            {
+              "id": "C01.08",
+              "title": "cuobjdump / nvdisasm 如何定位最终指令",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H01",
+            "H06",
+            "S01",
+            "S03"
+          ]
+        },
+        {
+          "id": "C02",
+          "title": "编译决策如何改变硬件行为",
+          "topics": [
+            {
+              "id": "C02.01",
+              "title": "循环展开如何增加独立指令",
+              "status": "planned"
+            },
+            {
+              "id": "C02.02",
+              "title": "展开如何增加寄存器压力",
+              "status": "planned"
+            },
+            {
+              "id": "C02.03",
+              "title": "live range 如何影响寄存器需求",
+              "status": "planned"
+            },
+            {
+              "id": "C02.04",
+              "title": "spill 生成的 local load/store",
+              "status": "planned"
+            },
+            {
+              "id": "C02.05",
+              "title": "指令调度如何安排依赖间隔",
+              "status": "planned"
+            },
+            {
+              "id": "C02.06",
+              "title": "分支何时被变成 predication",
+              "status": "planned"
+            },
+            {
+              "id": "C02.07",
+              "title": "向量化何时能够减少指令",
+              "status": "planned"
+            },
+            {
+              "id": "C02.08",
+              "title": "编译结果如何改变取指压力",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H03",
+            "H04",
+            "H05",
+            "H06",
+            "H07",
+            "H12"
+          ]
+        },
+        {
+          "id": "C03",
+          "title": "数学库、CUTLASS、CuTe 与 Triton",
+          "topics": [
+            {
+              "id": "C03.01",
+              "title": "cuBLAS 的算子与算法选择边界",
+              "status": "planned"
+            },
+            {
+              "id": "C03.02",
+              "title": "cuDNN 的算子与执行计划边界",
+              "status": "planned"
+            },
+            {
+              "id": "C03.03",
+              "title": "CUTLASS 的 mainloop 与 epilogue",
+              "status": "planned"
+            },
+            {
+              "id": "C03.04",
+              "title": "CuTe Layout 如何把坐标映射到地址",
+              "status": "planned"
+            },
+            {
+              "id": "C03.05",
+              "title": "CuTe layout composition",
+              "status": "planned"
+            },
+            {
+              "id": "C03.06",
+              "title": "copy partition 如何分配搬运工作",
+              "status": "planned"
+            },
+            {
+              "id": "C03.07",
+              "title": "MMA partition 如何分配计算工作",
+              "status": "planned"
+            },
+            {
+              "id": "C03.08",
+              "title": "CuTe DSL 的编译与执行入口",
+              "status": "planned"
+            },
+            {
+              "id": "C03.09",
+              "title": "Triton program 如何映射并行工作",
+              "status": "planned"
+            },
+            {
+              "id": "C03.10",
+              "title": "kernel autotuning 如何限定搜索空间",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D02",
+            "D03",
+            "H09",
+            "H10",
+            "H17",
+            "H18",
+            "H19"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "F",
+      "title": "Framework & Inference · 框架与推理",
+      "description": "围绕推理系统与项目实践扩展。",
+      "modules": [
+        {
+          "id": "F01",
+          "title": "PyTorch 到 GPU Kernel",
+          "topics": [
+            {
+              "id": "F01.01",
+              "title": "Tensor 的 device、dtype、layout 信息",
+              "status": "planned"
+            },
+            {
+              "id": "F01.02",
+              "title": "operator schema 与 dispatch key",
+              "status": "planned"
+            },
+            {
+              "id": "F01.03",
+              "title": "ATen 算子如何选择实现",
+              "status": "planned"
+            },
+            {
+              "id": "F01.04",
+              "title": "view 与 contiguous 引发的内存行为",
+              "status": "planned"
+            },
+            {
+              "id": "F01.05",
+              "title": "caching allocator 的分配与复用",
+              "status": "planned"
+            },
+            {
+              "id": "F01.06",
+              "title": "自定义算子的注册与调用",
+              "status": "planned"
+            },
+            {
+              "id": "F01.07",
+              "title": "torch.compile 的图捕获边界",
+              "status": "planned"
+            },
+            {
+              "id": "F01.08",
+              "title": "Inductor / Triton 生成代码的定位",
+              "status": "planned"
+            },
+            {
+              "id": "F01.09",
+              "title": "shape specialization 与重新编译",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "D02",
+            "S02",
+            "S03",
+            "C01",
+            "C03"
+          ]
+        },
+        {
+          "id": "F02",
+          "title": "vLLM 与推理框架的工作分配",
+          "topics": [
+            {
+              "id": "F02.01",
+              "title": "prefill 与 decode 的计算和访存差异",
+              "status": "planned"
+            },
+            {
+              "id": "F02.02",
+              "title": "continuous batching 的工作组织",
+              "status": "planned"
+            },
+            {
+              "id": "F02.03",
+              "title": "KV cache 的逻辑页与物理块",
+              "status": "planned"
+            },
+            {
+              "id": "F02.04",
+              "title": "PagedAttention 的地址索引",
+              "status": "planned"
+            },
+            {
+              "id": "F02.05",
+              "title": "attention backend 的选择",
+              "status": "planned"
+            },
+            {
+              "id": "F02.06",
+              "title": "CUDA Graph 对 batch 和 shape 的约束",
+              "status": "planned"
+            },
+            {
+              "id": "F02.07",
+              "title": "算子融合如何减少 launch 与中间流量",
+              "status": "planned"
+            },
+            {
+              "id": "F02.08",
+              "title": "权重量化格式如何映射到 kernel",
+              "status": "planned"
+            },
+            {
+              "id": "F02.09",
+              "title": "CPU/GPU offload 的搬运和等待",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H09",
+            "H11",
+            "H12",
+            "H17",
+            "S02",
+            "S03",
+            "P03"
+          ]
+        },
+        {
+          "id": "F03",
+          "title": "自定义硬件 Backend 接入",
+          "topics": [
+            {
+              "id": "F03.01",
+              "title": "llama.cpp / ggml 的 backend 注册",
+              "status": "planned"
+            },
+            {
+              "id": "F03.02",
+              "title": "buffer 与 memory type 的接口",
+              "status": "planned"
+            },
+            {
+              "id": "F03.03",
+              "title": "算子支持能力的查询",
+              "status": "planned"
+            },
+            {
+              "id": "F03.04",
+              "title": "设备算子的选择和 fallback",
+              "status": "planned"
+            },
+            {
+              "id": "F03.05",
+              "title": "动态库加载与 ABI 边界",
+              "status": "planned"
+            },
+            {
+              "id": "F03.06",
+              "title": "stream / event 在 backend 中的表达",
+              "status": "planned"
+            },
+            {
+              "id": "F03.07",
+              "title": "高性能 GEMM、FA 与框架接口的衔接",
+              "status": "planned"
+            },
+            {
+              "id": "F03.08",
+              "title": "数值正确性与性能回归的边界",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "S01",
+            "S02",
+            "S03",
+            "C03",
+            "F01"
+          ]
+        },
+        {
+          "id": "F04",
+          "title": "多 GPU 与通信执行",
+          "topics": [
+            {
+              "id": "F04.01",
+              "title": "tensor parallel 如何切分计算",
+              "status": "planned"
+            },
+            {
+              "id": "F04.02",
+              "title": "collective 的数据流",
+              "status": "planned"
+            },
+            {
+              "id": "F04.03",
+              "title": "NCCL communicator 与拓扑",
+              "status": "planned"
+            },
+            {
+              "id": "F04.04",
+              "title": "通信 stream 与计算 stream 的依赖",
+              "status": "planned"
+            },
+            {
+              "id": "F04.05",
+              "title": "P2P 访问与中转搬运",
+              "status": "planned"
+            },
+            {
+              "id": "F04.06",
+              "title": "通信和计算如何重叠",
+              "status": "planned"
+            },
+            {
+              "id": "F04.07",
+              "title": "小消息延迟与大消息带宽",
+              "status": "planned"
+            },
+            {
+              "id": "F04.08",
+              "title": "跨卡同步如何影响 decode latency",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H20",
+            "S02",
+            "P01",
+            "P03"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P",
+      "title": "Performance · 性能模型与观测",
+      "description": "贯穿所有模块；NCU 看 kernel 内部，Nsight Systems 看时间线，微基准与源码补充不可直接观测的结构。",
+      "modules": [
+        {
+          "id": "P01",
+          "title": "性能模型与瓶颈判断",
+          "topics": [
+            {
+              "id": "P01.01",
+              "title": "端到端时间如何分解",
+              "status": "planned"
+            },
+            {
+              "id": "P01.02",
+              "title": "Arithmetic Intensity 的计算口径",
+              "status": "planned"
+            },
+            {
+              "id": "P01.03",
+              "title": "Roofline 的算力与带宽上界",
+              "status": "planned"
+            },
+            {
+              "id": "P01.04",
+              "title": "compute-bound 与 memory-bound 的判断条件",
+              "status": "planned"
+            },
+            {
+              "id": "P01.05",
+              "title": "latency-bound 与 throughput-bound 的区别",
+              "status": "planned"
+            },
+            {
+              "id": "P01.06",
+              "title": "Little’s Law 对在途并发的估算",
+              "status": "planned"
+            },
+            {
+              "id": "P01.07",
+              "title": "peak rate 与实测有效吞吐",
+              "status": "planned"
+            },
+            {
+              "id": "P01.08",
+              "title": "Amdahl 定律与优化收益",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H08",
+            "H09",
+            "H12",
+            "H13",
+            "H20"
+          ]
+        },
+        {
+          "id": "P02",
+          "title": "NCU 指标与源码归因",
+          "topics": [
+            {
+              "id": "P02.01",
+              "title": "NCU metric 的单位与统计范围",
+              "status": "planned"
+            },
+            {
+              "id": "P02.02",
+              "title": "active / elapsed 周期的区别",
+              "status": "planned"
+            },
+            {
+              "id": "P02.03",
+              "title": "active、eligible、issued warp 的对应",
+              "status": "planned"
+            },
+            {
+              "id": "P02.04",
+              "title": "pipe utilization 与 issue efficiency",
+              "status": "planned"
+            },
+            {
+              "id": "P02.05",
+              "title": "warp stall 采样在 SASS 上的归因",
+              "status": "planned"
+            },
+            {
+              "id": "P02.06",
+              "title": "coalescing 与 bank conflict 的指标",
+              "status": "planned"
+            },
+            {
+              "id": "P02.07",
+              "title": "register pressure、occupancy 与 spill",
+              "status": "planned"
+            },
+            {
+              "id": "P02.08",
+              "title": "采集配置、replay 与结果可信度",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "H01",
+            "H03",
+            "H04",
+            "H08",
+            "H09",
+            "H10"
+          ]
+        },
+        {
+          "id": "P03",
+          "title": "系统时间线与工具边界",
+          "topics": [
+            {
+              "id": "P03.01",
+              "title": "Nsight Systems 的 CPU / GPU 时间线",
+              "status": "planned"
+            },
+            {
+              "id": "P03.02",
+              "title": "CUDA API 时间与 kernel 时间",
+              "status": "planned"
+            },
+            {
+              "id": "P03.03",
+              "title": "launch gap 与隐式同步",
+              "status": "planned"
+            },
+            {
+              "id": "P03.04",
+              "title": "copy 与 compute 的重叠",
+              "status": "planned"
+            },
+            {
+              "id": "P03.05",
+              "title": "Graph replay 的时间线变化",
+              "status": "planned"
+            },
+            {
+              "id": "P03.06",
+              "title": "CUPTI 的事件与采样来源",
+              "status": "planned"
+            },
+            {
+              "id": "P03.07",
+              "title": "NVML 指标的粒度与限制",
+              "status": "planned"
+            },
+            {
+              "id": "P03.08",
+              "title": "微基准、库级测试与框架端到端测试",
+              "status": "planned"
+            }
+          ],
+          "links": [
+            "S01",
+            "S02",
+            "S03",
+            "F01",
+            "F02",
+            "F04"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "R",
+      "title": "Project Studies · 项目与工程实践",
+      "description": "从真实项目出发，连接算法、kernel、硬件与可复现证据。这里只列学习主题；仓库说明与真机验收分别记录。",
+      "modules": [
+        {
+          "id": "R01",
+          "title": "QUactlize · 低比特 GEMM / GEMV",
+          "topics": [
+            {
+              "id": "R01.01",
+              "title": "W4A16 / W2A16 / W1A16 的数据与计算路径"
+            },
+            {
+              "id": "R01.02",
+              "title": "Q3_K / Q5_K / Q6_K 的 bit-plane 分解"
+            },
+            {
+              "id": "R01.03",
+              "title": "scale / zero / min 如何进入累加公式"
+            },
+            {
+              "id": "R01.04",
+              "title": "离线重排与运行时解包的分工"
+            },
+            {
+              "id": "R01.05",
+              "title": "小 M 的 GEMV 与大 M 的 GEMM 路径选择"
+            },
+            {
+              "id": "R01.06",
+              "title": "MoE grouped GEMM 的专家与工作分配"
+            },
+            {
+              "id": "R01.07",
+              "title": "Split-K 的额外流量与归约代价"
+            },
+            {
+              "id": "R01.08",
+              "title": "反量化吞吐如何限制矩阵乘法"
+            },
+            {
+              "id": "R01.09",
+              "title": "GGUF 原始格式与内部布局的兼容契约"
+            },
+            {
+              "id": "R01.10",
+              "title": "PPU 到 NVIDIA：哪些可复用，哪些需要重写"
+            },
+            {
+              "id": "R01.11",
+              "title": "独立数值 oracle 与真实权重测试"
+            },
+            {
+              "id": "R01.12",
+              "title": "在固定 shape 下比较速度、流量与精度"
+            }
+          ],
+          "links": [
+            "Q01",
+            "Q06",
+            "C03",
+            "H08",
+            "H17",
+            "P02"
+          ],
+          "note": ""
+        },
+        {
+          "id": "R02",
+          "title": "actlizeLA · 线性注意力与状态",
+          "topics": [
+            {
+              "id": "R02.01",
+              "title": "Gated DeltaNet 递推状态的更新"
+            },
+            {
+              "id": "R02.02",
+              "title": "recurrent decode 与 chunk prefill 的关系"
+            },
+            {
+              "id": "R02.03",
+              "title": "WY / residual 表达式如何改变计算组织"
+            },
+            {
+              "id": "R02.04",
+              "title": "chunk 内三角系统与求解开销"
+            },
+            {
+              "id": "R02.05",
+              "title": "state 的 K×V / V×K 布局转换"
+            },
+            {
+              "id": "R02.06",
+              "title": "分组 value heads 的数据复用"
+            },
+            {
+              "id": "R02.07",
+              "title": "gate 与 FP32 state 的数值误差"
+            },
+            {
+              "id": "R02.08",
+              "title": "prefill / decode / verify 的接口边界"
+            },
+            {
+              "id": "R02.09",
+              "title": "投机拒绝后如何保留正确的状态前缀"
+            },
+            {
+              "id": "R02.10",
+              "title": "caller-owned workspace 与 Graph capture"
+            },
+            {
+              "id": "R02.11",
+              "title": "SM80 / SM90 / PPU 的调度差异"
+            },
+            {
+              "id": "R02.12",
+              "title": "完整 forward 的计时与 shape dispatch"
+            },
+            {
+              "id": "R02.13",
+              "title": "NVIDIA 路径的安装、复现与支持矩阵"
+            }
+          ],
+          "links": [
+            "D02",
+            "D03",
+            "C03",
+            "H18",
+            "T05",
+            "P03"
+          ],
+          "note": ""
+        },
+        {
+          "id": "R03",
+          "title": "KDA · Agent 驱动的算子开发",
+          "topics": [
+            {
+              "id": "R03.01",
+              "title": "把算子需求写成可验证的任务契约"
+            },
+            {
+              "id": "R03.02",
+              "title": "独立正确性 oracle 如何设计"
+            },
+            {
+              "id": "R03.03",
+              "title": "代表性 shape 与对照 baseline 的选择"
+            },
+            {
+              "id": "R03.04",
+              "title": "从 NCU 证据提出一个优化假设"
+            },
+            {
+              "id": "R03.05",
+              "title": "一次只改变一个变量的候选实验"
+            },
+            {
+              "id": "R03.06",
+              "title": "性能噪声与错误加速的识别"
+            },
+            {
+              "id": "R03.07",
+              "title": "候选淘汰与回归测试的边界"
+            },
+            {
+              "id": "R03.08",
+              "title": "把优化过程整理为可复现记录"
+            }
+          ],
+          "links": [
+            "H01",
+            "C03",
+            "P02",
+            "P03"
+          ],
+          "note": "KDA 指 Kernel Design Agents。"
+        },
+        {
+          "id": "R04",
+          "title": "llama.cpp · 投机实现阅读",
+          "topics": [
+            {
+              "id": "R04.01",
+              "title": "common_speculative 的初始化与生命周期"
+            },
+            {
+              "id": "R04.02",
+              "title": "begin / process / draft / accept 如何衔接"
+            },
+            {
+              "id": "R04.03",
+              "title": "draft token 与 target batch 的位置对齐"
+            },
+            {
+              "id": "R04.04",
+              "title": "sampler 状态如何跟随 accepted prefix"
+            },
+            {
+              "id": "R04.05",
+              "title": "KV cache 的裁剪与提交"
+            },
+            {
+              "id": "R04.06",
+              "title": "recurrent state 的回滚与重放"
+            },
+            {
+              "id": "R04.07",
+              "title": "MTP head 与独立 draft 的装载区别"
+            },
+            {
+              "id": "R04.08",
+              "title": "backend sampling 与主机设备同步"
+            },
+            {
+              "id": "R04.09",
+              "title": "每轮接受长度与端到端计时"
+            },
+            {
+              "id": "R04.10",
+              "title": "个人分支与上游主线的支持差异"
+            }
+          ],
+          "links": [
+            "T01",
+            "T02",
+            "T03",
+            "T04",
+            "T05",
+            "F03",
+            "S02"
+          ],
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "Q",
+      "title": "Quantization · 量化与低精度",
+      "description": "基础方法与近期前沿按机制学习。比较质量、实际 bits/weight、资源和部署代价；主线兼容、专用 kernel 与研究实现分别核实。",
+      "modules": [
+        {
+          "id": "Q01",
+          "title": "表示、误差与格式",
+          "topics": [
+            {
+              "id": "Q01.01",
+              "title": "对称与非对称量化的重建公式"
+            },
+            {
+              "id": "Q01.02",
+              "title": "per-tensor / channel / group 的差别"
+            },
+            {
+              "id": "Q01.03",
+              "title": "rounding 与 clipping 各引入什么误差"
+            },
+            {
+              "id": "Q01.04",
+              "title": "scale / zero 元数据占用多少空间"
+            },
+            {
+              "id": "Q01.05",
+              "title": "W-only 与 W+A 量化改变哪段瓶颈"
+            },
+            {
+              "id": "Q01.06",
+              "title": "INT4 / FP8 / MXFP4 / NVFP4 的表示差别"
+            },
+            {
+              "id": "Q01.07",
+              "title": "GGUF 容器与 K / IQ 量化类型的关系"
+            },
+            {
+              "id": "Q01.08",
+              "title": "fake quant 与 packed kernel 的数值对齐"
+            }
+          ],
+          "links": [
+            "R01",
+            "H08",
+            "H17",
+            "P01"
+          ],
+          "note": ""
+        },
+        {
+          "id": "Q02",
+          "title": "PTQ · 校准与重建",
+          "topics": [
+            {
+              "id": "Q02.01",
+              "title": "校准样本如何影响层输入分布"
+            },
+            {
+              "id": "Q02.02",
+              "title": "RTN 作为量化基线"
+            },
+            {
+              "id": "Q02.03",
+              "title": "GPTQ 的二阶误差与补偿"
+            },
+            {
+              "id": "Q02.04",
+              "title": "AWQ 的激活感知缩放"
+            },
+            {
+              "id": "Q02.05",
+              "title": "SmoothQuant 的权重与激活尺度迁移"
+            },
+            {
+              "id": "Q02.06",
+              "title": "AutoRound 的舍入优化"
+            },
+            {
+              "id": "Q02.07",
+              "title": "QuaRot / SpinQuant 的旋转与离群值"
+            },
+            {
+              "id": "Q02.08",
+              "title": "MoE 专家覆盖与校准偏差"
+            }
+          ],
+          "links": [
+            "Q01",
+            "Q06",
+            "F02"
+          ],
+          "note": ""
+        },
+        {
+          "id": "Q03",
+          "title": "低比特前沿 · 机制与取舍",
+          "topics": [
+            {
+              "id": "Q03.01",
+              "title": "GSQ 的离散码值与 scale 优化"
+            },
+            {
+              "id": "Q03.02",
+              "title": "RCO 的预算约束混合精度搜索"
+            },
+            {
+              "id": "Q03.03",
+              "title": "GPTQ-GGUF 与格式内优化"
+            },
+            {
+              "id": "Q03.04",
+              "title": "QuIP# 的旋转与码本表示"
+            },
+            {
+              "id": "Q03.05",
+              "title": "AQLM / QTIP 的向量或 trellis 表示"
+            },
+            {
+              "id": "Q03.06",
+              "title": "Tequila 的三值量化路线"
+            },
+            {
+              "id": "Q03.07",
+              "title": "Sherry 的超低比特与专用 kernel"
+            },
+            {
+              "id": "Q03.08",
+              "title": "不同方法的质量—体积—延迟比较"
+            }
+          ],
+          "links": [
+            "Q01",
+            "Q02",
+            "Q06",
+            "R01"
+          ],
+          "note": "这些是研究主题与候选方法，排名和部署支持随模型、硬件和版本核验。"
+        },
+        {
+          "id": "Q04",
+          "title": "QAT / QAD · 精度恢复",
+          "topics": [
+            {
+              "id": "Q04.01",
+              "title": "PTQ、QAT、QAD 各优化什么"
+            },
+            {
+              "id": "Q04.02",
+              "title": "STE 如何传递量化梯度"
+            },
+            {
+              "id": "Q04.03",
+              "title": "teacher logits 与 KL 蒸馏目标"
+            },
+            {
+              "id": "Q04.04",
+              "title": "量化 student 与高精度 teacher 的配合"
+            },
+            {
+              "id": "Q04.05",
+              "title": "训练 scale 与更新权重的区别"
+            },
+            {
+              "id": "Q04.06",
+              "title": "全参、局部参数与资源成本"
+            },
+            {
+              "id": "Q04.07",
+              "title": "activation / optimizer / teacher 的显存开销"
+            },
+            {
+              "id": "Q04.08",
+              "title": "Model Optimizer / AngelSlim 的训练与导出链路"
+            }
+          ],
+          "links": [
+            "Q02",
+            "Q06",
+            "F01"
+          ],
+          "note": ""
+        },
+        {
+          "id": "Q05",
+          "title": "激活、KV 与注意力量化",
+          "topics": [
+            {
+              "id": "Q05.01",
+              "title": "静态与动态 activation scale"
+            },
+            {
+              "id": "Q05.02",
+              "title": "KV 的 per-channel 与 per-token 缩放"
+            },
+            {
+              "id": "Q05.03",
+              "title": "K / V 的误差敏感性差异"
+            },
+            {
+              "id": "Q05.04",
+              "title": "KIVI / KVQuant 的 KV 压缩路线"
+            },
+            {
+              "id": "Q05.05",
+              "title": "KVFloat13 的定长打包与解码开销"
+            },
+            {
+              "id": "Q05.06",
+              "title": "QK 与 PV 的不同精度路径"
+            },
+            {
+              "id": "Q05.07",
+              "title": "融合解码与独立解码的流量差别"
+            },
+            {
+              "id": "Q05.08",
+              "title": "长上下文质量与端到端性能评估"
+            }
+          ],
+          "links": [
+            "R02",
+            "H09",
+            "H11",
+            "F02"
+          ],
+          "note": ""
+        },
+        {
+          "id": "Q06",
+          "title": "从量化模型到可部署 kernel",
+          "topics": [
+            {
+              "id": "Q06.01",
+              "title": "目标框架实际支持哪些量化格式"
+            },
+            {
+              "id": "Q06.02",
+              "title": "scale / zero 布局如何匹配 kernel"
+            },
+            {
+              "id": "Q06.03",
+              "title": "repack 与离线转换的资源代价"
+            },
+            {
+              "id": "Q06.04",
+              "title": "混合精度如何映射到算子选择"
+            },
+            {
+              "id": "Q06.05",
+              "title": "MoE 的专家量化与路由边界"
+            },
+            {
+              "id": "Q06.06",
+              "title": "prefill 与 decode 为什么收益不同"
+            },
+            {
+              "id": "Q06.07",
+              "title": "主线 llama.cpp、fork 与未合入实现的区分"
+            },
+            {
+              "id": "Q06.08",
+              "title": "质量、显存、TTFT、TPOT 的统一对照"
+            }
+          ],
+          "links": [
+            "R01",
+            "F03",
+            "P01",
+            "P03"
+          ],
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "T",
+      "title": "Speculative Decoding · 投机解码",
+      "description": "先讲生成与验证，再比较草稿来源、并行程度和实际系统收益。方法成立的条件与项目实现逐项核对。",
+      "modules": [
+        {
+          "id": "T01",
+          "title": "正确性 · Draft、Verify 与 Accept",
+          "topics": [
+            {
+              "id": "T01.01",
+              "title": "一轮 draft / verify / accept 的数据流"
+            },
+            {
+              "id": "T01.02",
+              "title": "greedy 验证与随机采样验证的差别"
+            },
+            {
+              "id": "T01.03",
+              "title": "p / q 接受概率在什么条件下成立"
+            },
+            {
+              "id": "T01.04",
+              "title": "拒绝后的残差分布与重新采样"
+            },
+            {
+              "id": "T01.05",
+              "title": "bonus token 与下一轮起点"
+            },
+            {
+              "id": "T01.06",
+              "title": "temperature / top-k / top-p 的应用位置"
+            },
+            {
+              "id": "T01.07",
+              "title": "输出分布一致与同 seed 逐字一致的区别"
+            },
+            {
+              "id": "T01.08",
+              "title": "用小词表验证采样正确性"
+            }
+          ],
+          "links": [
+            "R04",
+            "F02"
+          ],
+          "note": ""
+        },
+        {
+          "id": "T02",
+          "title": "草稿来源 · 小模型与无模型方法",
+          "topics": [
+            {
+              "id": "T02.01",
+              "title": "独立小 draft 模型的成本"
+            },
+            {
+              "id": "T02.02",
+              "title": "同架构或不同架构的 draft 匹配"
+            },
+            {
+              "id": "T02.03",
+              "title": "tokenizer 与词表映射的约束"
+            },
+            {
+              "id": "T02.04",
+              "title": "prompt lookup / n-gram 的候选来源"
+            },
+            {
+              "id": "T02.05",
+              "title": "缓存命中如何改变接受长度"
+            },
+            {
+              "id": "T02.06",
+              "title": "self-speculation / early exit 的边界"
+            },
+            {
+              "id": "T02.07",
+              "title": "动态 draft 长度的选择"
+            }
+          ],
+          "links": [
+            "T01",
+            "R04",
+            "P01"
+          ],
+          "note": ""
+        },
+        {
+          "id": "T03",
+          "title": "MTP、Medusa 与 EAGLE",
+          "topics": [
+            {
+              "id": "T03.01",
+              "title": "MTP head 如何预测后续 token"
+            },
+            {
+              "id": "T03.02",
+              "title": "MTP 训练目标与推理验证的关系"
+            },
+            {
+              "id": "T03.03",
+              "title": "Medusa 多头候选如何组织"
+            },
+            {
+              "id": "T03.04",
+              "title": "树状候选的 attention mask"
+            },
+            {
+              "id": "T03.05",
+              "title": "EAGLE 的特征草稿路线"
+            },
+            {
+              "id": "T03.06",
+              "title": "EAGLE-3 的训练与 target 特征"
+            },
+            {
+              "id": "T03.07",
+              "title": "draft 专用训练数据的构建"
+            },
+            {
+              "id": "T03.08",
+              "title": "链式与树式验证的工作量比较"
+            }
+          ],
+          "links": [
+            "T01",
+            "T02",
+            "R04",
+            "F02"
+          ],
+          "note": ""
+        },
+        {
+          "id": "T04",
+          "title": "并行草稿 · DFlash 及扩展",
+          "topics": [
+            {
+              "id": "T04.01",
+              "title": "DFlash 如何一次产生一个 token block"
+            },
+            {
+              "id": "T04.02",
+              "title": "target hidden state 如何条件化草稿"
+            },
+            {
+              "id": "T04.03",
+              "title": "block diffusion 与自回归草稿的成本"
+            },
+            {
+              "id": "T04.04",
+              "title": "DSpark 的块内依赖表达"
+            },
+            {
+              "id": "T04.05",
+              "title": "DFlare 的层间融合研究方向"
+            },
+            {
+              "id": "T04.06",
+              "title": "block 大小与接受前缀的关系"
+            },
+            {
+              "id": "T04.07",
+              "title": "draft 吞吐与 target verify 成本的平衡"
+            }
+          ],
+          "links": [
+            "T01",
+            "T03",
+            "T05",
+            "R04"
+          ],
+          "note": ""
+        },
+        {
+          "id": "T05",
+          "title": "系统收益 · 缓存、状态与调度",
+          "topics": [
+            {
+              "id": "T05.01",
+              "title": "accepted tokens / round 的计数口径"
+            },
+            {
+              "id": "T05.02",
+              "title": "draft、verify 与回滚时间的分解"
+            },
+            {
+              "id": "T05.03",
+              "title": "接受率高但总延迟变差的原因"
+            },
+            {
+              "id": "T05.04",
+              "title": "recurrent state 如何 checkpoint 与 commit"
+            },
+            {
+              "id": "T05.05",
+              "title": "多请求 batching 对投机收益的影响"
+            },
+            {
+              "id": "T05.06",
+              "title": "CUDA Graph 的 draft 长度与 shape"
+            },
+            {
+              "id": "T05.07",
+              "title": "投机量化如何影响质量和接受长度"
+            },
+            {
+              "id": "T05.08",
+              "title": "框架统计、Nsight Systems 与 NCU 的分工"
+            }
+          ],
+          "links": [
+            "R02",
+            "R04",
+            "Q06",
+            "S02",
+            "P03"
+          ],
+          "note": ""
+        }
+      ]
+    }
+  ],
+  "researchPolicy": "按 2026-11-07 已核对的项目目录规划。前沿方法是研究候选，需在学习时核对原始论文、源码版本及目标模型结果；不承诺统一 SOTA 或所有方法均可在主线 llama.cpp 运行。",
+  "projectSources": [
+    {
+      "title": "QUactlize",
+      "url": "https://github.com/DrXuQian/QUactlize",
+      "readmeBlob": "a1725b70fccee99e126740da99c54cbcb4b05633"
+    },
+    {
+      "title": "actlizeLA",
+      "url": "https://github.com/DrXuQian/actlizeLA",
+      "readmeBlob": "85f45089da81825c5fcb6019e9b5f7bdff4ee626"
+    },
+    {
+      "title": "KDA",
+      "url": "https://github.com/DrXuQian/kda",
+      "readmeBlob": "5beb7a257e85bd7ccf68e29baf507bc4acea6ad7"
+    },
+    {
+      "title": "llama.cpp speculative",
+      "url": "https://github.com/DrXuQian/llama.cpp/blob/master/docs/speculative.md",
+      "readmeBlob": "ffb1e34c7fbfa7151f8cc4a7c747e054e72542bc"
+    }
+  ]
+}
